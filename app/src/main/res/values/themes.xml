@@ -1,22 +1,131 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools">
 
     <!--
-        夜班值守专用主题。
+        ============================================================
+         应用主题
+        ============================================================
 
-        刻意选 parent="Theme.Material3.Dark.NoActionBar" 而不是 DayNight：
-          - DayNight 会跟随系统在「白天变白底」，夜间看去一片惨白，刺眼。
-          - NoActionBar 去掉标题栏，让相机画面能铺满整块屏幕。
+        刻意选 Material3.Dark 而不是 DayNight：
+        这是夜班值守终端，任何情况下都不应该变成浅色 ——
+        半夜跳出一块白屏比什么都刺眼。
 
-        注意：本项目已【删除】res/values-night/themes.xml。
-        因为这里已经是固定的深色主题，不再需要夜间变体；
-        留着它反而会在系统深色模式下覆盖掉这里的设置。
+        也刻意去掉标题栏（NoActionBar），让相机画面铺满整屏。
     -->
     <style name="Theme.GasStationGuard" parent="Theme.Material3.Dark.NoActionBar">
-        <item name="android:windowBackground">@android:color/black</item>
+        <item name="android:windowBackground">@color/surface</item>
+        <item name="colorSurface">@color/surface_container</item>
+        <item name="colorOnSurface">@color/on_surface</item>
+        <item name="colorOnSurfaceVariant">@color/on_surface_variant</item>
+        <item name="colorPrimary">@color/accent</item>
+        <item name="colorOnPrimary">@color/surface</item>
+        <item name="colorOutline">@color/outline</item>
+        <item name="colorError">@color/danger</item>
+
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowLightStatusBar">false</item>
+
+        <!-- 对话框统一走我们自己的样式 -->
+        <item name="materialAlertDialogTheme">@style/ThemeOverlay.GasGuard.Dialog</item>
+    </style>
+
+    <!-- ============================================================
+         对话框
+         ============================================================ -->
+    <style name="ThemeOverlay.GasGuard.Dialog" parent="ThemeOverlay.Material3.MaterialAlertDialog">
+        <item name="colorSurface">@color/surface_container</item>
+        <item name="colorOnSurface">@color/on_surface</item>
+        <item name="colorOnSurfaceVariant">@color/on_surface_variant</item>
+        <item name="colorPrimary">@color/accent</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:backgroundDimAmount">0.6</item>
+    </style>
+
+    <!-- ============================================================
+         文字样式
+
+         统一在这里定义，布局里只引用不写死字号 ——
+         否则改一次字阶要翻遍所有布局文件。
+         ============================================================ -->
+
+    <!-- 分组标题：小号 + 疏字距，是"高级感"最省力的一招 -->
+    <style name="Text.GasGuard.SectionLabel" parent="">
+        <item name="android:textSize">@dimen/text_caption</item>
+        <item name="android:letterSpacing">0.10</item>
+        <item name="android:textColor">@color/on_surface_variant</item>
+        <item name="android:textStyle">normal</item>
+    </style>
+
+    <!-- 设置项标题 -->
+    <style name="Text.GasGuard.ItemTitle" parent="">
+        <item name="android:textSize">@dimen/text_body</item>
+        <item name="android:textColor">@color/on_surface</item>
+    </style>
+
+    <!-- 设置项说明 -->
+    <style name="Text.GasGuard.ItemHint" parent="">
+        <item name="android:textSize">@dimen/text_caption</item>
+        <item name="android:textColor">@color/on_surface_faint</item>
+        <item name="android:lineSpacingExtra">2dp</item>
+    </style>
+
+    <!-- 风险提示：风险项用琥珀色而不是红色 -->
+    <style name="Text.GasGuard.RiskHint" parent="Text.GasGuard.ItemHint">
+        <item name="android:textColor">@color/warning</item>
+    </style>
+
+    <style name="Text.GasGuard.Title" parent="">
+        <item name="android:textSize">@dimen/text_title</item>
+        <item name="android:textColor">@color/on_surface</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:letterSpacing">0.01</item>
+    </style>
+
+    <!-- ============================================================
+         控件样式
+         ============================================================ -->
+
+    <!-- 设置项按钮：描边式，比实心按钮轻，不会喧宾夺主 -->
+    <style name="Widget.GasGuard.Button.Outlined" parent="Widget.Material3.Button.OutlinedButton">
+        <item name="android:textSize">@dimen/text_body</item>
+        <item name="android:textColor">@color/on_surface</item>
+        <item name="strokeColor">@color/outline</item>
+        <item name="android:minHeight">48dp</item>
+        <item name="backgroundTint">@android:color/transparent</item>
+        <item name="cornerRadius">@dimen/radius_md</item>
+        <item name="android:letterSpacing">0.02</item>
+    </style>
+
+    <!-- 危险操作按钮（删除、退出）：描边红色 -->
+    <style name="Widget.GasGuard.Button.Danger" parent="Widget.GasGuard.Button.Outlined">
+        <item name="android:textColor">@color/danger</item>
+        <item name="strokeColor">@color/danger</item>
+    </style>
+
+    <!-- 对话框底部按钮 -->
+    <style name="Widget.GasGuard.Button.DialogAction" parent="Widget.Material3.Button.TextButton">
+        <item name="android:textSize">@dimen/text_body</item>
+        <item name="android:letterSpacing">0.04</item>
+        <item name="android:minWidth">88dp</item>
+    </style>
+
+    <!-- 单选行：去掉默认的密集感，行高给足 -->
+    <style name="Widget.GasGuard.RadioButton" parent="Widget.Material3.CompoundButton.RadioButton">
+        <item name="android:textSize">@dimen/text_body</item>
+        <item name="android:textColor">@color/on_surface</item>
+        <item name="android:paddingTop">@dimen/space_sm</item>
+        <item name="android:paddingBottom">@dimen/space_sm</item>
+        <item name="android:paddingStart">0dp</item>
+        <item name="android:paddingEnd">@dimen/space_lg</item>
+        <item name="buttonTint">@color/accent</item>
+    </style>
+
+    <!-- 分割线：比默认细、比默认淡 -->
+    <style name="Widget.GasGuard.Divider" parent="">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">@dimen/stroke_hairline</item>
+        <item name="android:background">@color/outline_variant</item>
     </style>
 
 </resources>

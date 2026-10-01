@@ -1,5 +1,74 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+    ============================================================
+     配色规范
+    ============================================================
+
+    设计约束来自使用场景，不是审美偏好：
+
+    ① **夜间使用** —— 值班室半夜是暗的，屏幕亮度就是刺眼程度。
+       所以底色接近纯黑、正文不用纯白（#E8E8EA 而不是 #FFFFFF）。
+       纯白在暗环境里会有明显光晕，看久了眼睛累。
+
+    ② **画面优先** —— 值守界面上所有元素都必须"退后"。
+       所以界面用深灰而不是彩色，让相机画面本身成为唯一焦点。
+
+    ③ **语义色严格分离** —— 三个状态各有专属颜色，绝不混用：
+         青绿 = 系统正常在岗（冷静、可控）
+         琥珀 = 需要注意（降载、权限缺失）
+         红   = 报警（唯一的"喊叫"色）
+
+       琥珀和红刻意拉开距离：用户看到颜色就知道该紧张还是该处理。
+
+    ④ 不用渐变、不用投影 —— 深色界面上的投影几乎看不见，只会显得脏。
+       层次感靠"底色深浅差 + 细描边"来做。
+-->
 <resources>
-    <color name="black">#FF000000</color>
-    <color name="white">#FFFFFFFF</color>
+
+    <!-- ========== 表面层级：越靠上层越浅 ========== -->
+    <color name="surface">#0B0B0D</color>
+    <!-- 主背景 -->
+    <color name="surface_container">#141417</color>
+    <!-- 卡片、对话框 -->
+    <color name="surface_container_high">#1C1C20</color>
+    <!-- 选中项、更高层 -->
+    <color name="surface_container_highest">#242429</color>
+    <!-- 按压态 -->
+
+    <!-- ========== 文字 ========== -->
+    <color name="on_surface">#E8E8EA</color>
+    <!-- 正文。刻意不用纯白 -->
+    <color name="on_surface_variant">#9A9AA0</color>
+    <!-- 次要说明文字 -->
+    <color name="on_surface_faint">#6A6A70</color>
+    <!-- 更弱的提示 -->
+
+    <!-- ========== 描边与分割 ========== -->
+    <color name="outline">#2A2A2F</color>
+    <color name="outline_variant">#1F1F23</color>
+
+    <!-- ========== 语义色 ========== -->
+    <color name="accent">#63D2C0</color>
+    <!-- 系统正常。青绿，传达"冷静、在岗" -->
+    <color name="accent_dim">#1E3A36</color>
+    <!-- accent 的深色底衬 -->
+    <color name="warning">#E0A64A</color>
+    <!-- 需要处理：降载、权限缺失 -->
+    <color name="warning_dim">#3A2A12</color>
+    <color name="danger">#E5484D</color>
+    <!-- 危险操作：删除、退出 -->
+    <color name="alarm">#D32F2F</color>
+    <!-- 报警底色 -->
+
+    <!-- ========== 检测框（画在相机画面上，需要高对比） ========== -->
+    <color name="box_car">#63D2C0</color>
+    <!-- 汽车 -->
+    <color name="box_motorcycle">#5AB0E8</color>
+    <!-- 摩托车 -->
+    <color name="box_bus">#9B8CE8</color>
+    <!-- 客车 -->
+    <color name="box_truck">#E0A64A</color>
+    <!-- 卡车 -->
+    <color name="box_other">#9A9AA0</color>
+
 </resources>

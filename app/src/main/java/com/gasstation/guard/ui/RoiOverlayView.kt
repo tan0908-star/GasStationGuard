@@ -13,6 +13,8 @@ import android.util.AttributeSet
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
+import androidx.core.content.ContextCompat
+import com.gasstation.guard.R
 import com.gasstation.guard.detect.RoiRect
 
 /**
@@ -92,30 +94,37 @@ class RoiOverlayView @JvmOverloads constructor(
     // ---------- 画笔 ----------
     /** ROI 之外的遮罩：压暗，让监测区域一眼可见 */
     private val dimPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = 0x99000000.toInt()
+        color = 0xA6000000.toInt()
         style = Paint.Style.FILL
     }
+
+    /** 已保存的 ROI 边框：细线 + 品牌青绿 */
     private val roiBorderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = 0xFF00E676.toInt()
+        color = ContextCompat.getColor(context, R.color.accent)
+        style = Paint.Style.STROKE
+        strokeWidth = 1.5f * density
+    }
+
+    /** 正在拖拽时的临时边框：琥珀色虚线。
+     *  用虚线是为了和"已生效"的实线明确区分 ——
+     *  松手前和松手后长得一样的话，用户不知道自己到底保存了没有。 */
+    private val dragBorderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = ContextCompat.getColor(context, R.color.warning)
         style = Paint.Style.STROKE
         strokeWidth = 2f * density
-    }
-    private val dragBorderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = 0xFFFFEB3B.toInt()
-        style = Paint.Style.STROKE
-        strokeWidth = 3f * density
         pathEffect = android.graphics.DashPathEffect(
-            floatArrayOf(14f * density, 10f * density), 0f
+            floatArrayOf(12f * density, 8f * density), 0f
         )
     }
+
     private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.WHITE
-        textSize = 15f * density
+        color = ContextCompat.getColor(context, R.color.on_surface)
+        textSize = 14f * density
         textAlign = Paint.Align.CENTER
-        typeface = Typeface.DEFAULT_BOLD
+        letterSpacing = 0.02f
     }
     private val textBgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = 0xD9000000.toInt()
+        color = 0xE6141417.toInt()
         style = Paint.Style.FILL
     }
 
@@ -172,6 +181,11 @@ class RoiOverlayView @JvmOverloads constructor(
 
     private fun currentVideoRect(): RectF =
         computeVideoRect(width, height, imageWidth, imageHeight)
+
+    /** 监测区域是否等同于整幅画面（也就是用户还没框选过） */
+    private fun isFullFrame(): Boolean =
+        roi.left <= 0.002f && roi.top <= 0.002f &&
+            roi.right >= 0.998f && roi.bottom >= 0.998f
 
     /** 屏幕坐标 → 图像归一化坐标 */
     private fun toNormalized(x: Float, y: Float): Pair<Float, Float> {
@@ -261,6 +275,11 @@ class RoiOverlayView @JvmOverloads constructor(
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
 
+        // 还没框选过监测区域时，整幅画面都是监测范围 ——
+        // 这时候画一圈边框只是在告诉用户"这里有个框"，没有任何信息量，
+        // 反而让干净的画面多了一道没意义的线。所以直接不画。
+        if (!calibrating && isFullFrame()) return
+
         // 正在拖动时，用「手指按下点 → 当前点」这个临时矩形，画成黄虚线
         val drawRect = if (calibrating) {
             val (nx1, ny1) = toNormalized(downX, downY)
@@ -304,13 +323,14 @@ class RoiOverlayView @JvmOverloads constructor(
             null
         }
         if (hint != null) {
-            val textY = height * 0.12f
+            val textY = height * 0.14f
             val textWidth = textPaint.measureText(hint)
-            canvas.drawRect(
-                width / 2f - textWidth / 2f - 12f * density,
-                textY - 26f * density,
-                width / 2f + textWidth / 2f + 12f * density,
-                textY + 8f * density,
+            val halfW = textWidth / 2f + 18f * density
+            val top = textY - 30f * density
+            val bottom = textY + 12f * density
+            canvas.drawRoundRect(
+                width / 2f - halfW, top, width / 2f + halfW, bottom,
+                (bottom - top) / 2f, (bottom - top) / 2f,
                 textBgPaint
             )
             canvas.drawText(hint, width / 2f, textY, textPaint)

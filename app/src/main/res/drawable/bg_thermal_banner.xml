@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    温度警告横幅。
+
+    用琥珀色深底而不是纯色块：既要显眼到能注意到，
+    又不能像报警那样"喊叫" —— 温度降载是需要处理，不是紧急事件。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="#E6251A08" />
+    <corners android:radius="@dimen/radius_md" />
+    <stroke
+        android:width="@dimen/stroke_hairline"
+        android:color="@color/warning" />
+</shape>

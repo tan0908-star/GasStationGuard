@@ -109,6 +109,18 @@ class SettingsStore(context: Context) {
         get() = prefs.getInt(KEY_ALARM_VOLUME, 100).coerceIn(30, 100)
         set(value) = prefs.edit().putInt(KEY_ALARM_VOLUME, value.coerceIn(30, 100)).apply()
 
+    /**
+     * 是否在值守界面上显示运行信息（帧率、分辨率、闸门状态、证据计数…）。
+     *
+     * 默认【关】。这块信息是给验收和排障用的仪表，不是给使用者看的界面 ——
+     * 满屏的技术数据会让非技术用户以为"这个软件很复杂 / 是不是出问题了"。
+     *
+     * ⚠️ 但做**长稳验收**时必须打开，否则观察不到帧率掉没掉、闸门有没有卡住。
+     */
+    var showDebugOverlay: Boolean
+        get() = prefs.getBoolean(KEY_SHOW_DEBUG, false)
+        set(value) = prefs.edit().putBoolean(KEY_SHOW_DEBUG, value).apply()
+
     /** 降载温度阈值（°C） */
     var throttleTempC: Float
         get() = prefs.getFloat(KEY_THROTTLE_TEMP, 45f).coerceIn(38f, 60f)
@@ -192,6 +204,7 @@ class SettingsStore(context: Context) {
         private const val KEY_DETECT_INTERVAL = "detect_interval_ms"
         private const val KEY_CONF_THRESHOLD = "confidence_threshold"
         private const val KEY_ALARM_VOLUME = "alarm_volume_percent"
+        private const val KEY_SHOW_DEBUG = "show_debug_overlay"
         private const val KEY_THROTTLE_TEMP = "throttle_temp_c"
         private const val KEY_PAUSE_TEMP = "pause_temp_c"
 

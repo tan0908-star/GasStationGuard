@@ -516,6 +516,13 @@ class MainActivity : AppCompatActivity() {
 
         // 长按左上角诊断条 = 打开设置
         // （M6 会做成正式的隐藏设置页，这里是 M3 的最小可用入口）
+        // 长按状态胶囊 = 打开设置。
+        // 胶囊是主界面上唯一常驻的元素，也是最自然的入口。
+        binding.statusChip.setOnLongClickListener {
+            showSettingsDialog()
+            true
+        }
+        // 调试面板也保留同样的入口（打开调试信息时用得上）
         binding.tvDiag.setOnLongClickListener {
             showSettingsDialog()
             true
@@ -1075,6 +1082,9 @@ class MainActivity : AppCompatActivity() {
         // 报警时藏起左上角诊断条：实测它会和报警文字叠在一起，看着像画面坏了，
         // 而人在半梦半醒时最不需要的就是"这个屏幕是不是出故障了"的困惑。
         binding.tvDiag.visibility = View.GONE
+        // 报警时把状态胶囊也收起来：整屏都是报警界面，
+        // 再挂一个"值守中"的胶囊既多余、又和报警信息抢注意力。
+        binding.statusChip.visibility = View.GONE
         // 长按时长以设置里的当前值为准（用户可能刚改过）
         applyHoldDuration()
         startFlash()
@@ -1102,7 +1112,9 @@ class MainActivity : AppCompatActivity() {
         binding.tvAlarmSubtitle.text = ""
         binding.alarmOverlay.visibility = View.GONE
         binding.tvAlarmDiag.visibility = View.GONE
-        binding.tvDiag.visibility = View.VISIBLE
+        binding.statusChip.visibility = View.VISIBLE
+        // 不在这里强制显示调试面板 —— 交给 updateDiag 按设置决定，
+        // 否则会覆盖用户"关闭运行信息"的选择。
 
         // 通知闸门：等画面清空之后才重新武装，避免同一个目标反复触发
         gate.onAlarmDismissed()
@@ -1349,6 +1361,31 @@ class MainActivity : AppCompatActivity() {
             setPadding(0, 8, 0, 0)
         })
 
+        // 运行信息开关
+        container.addView(TextView(this).apply {
+            text = "\n显示运行信息（帧率 / 分辨率 / 闸门状态）"
+            textSize = 14f
+            setPadding(0, 16, 0, 2)
+        })
+        container.addView(TextView(this).apply {
+            text = "默认关闭，让界面干净。⚠ 做长时间值守验收时必须打开，" +
+                "否则看不到帧率掉没掉、画面有没有卡。"
+            textSize = 12f
+            setTextColor(0xFFFF6D00.toInt())
+            setPadding(0, 0, 0, 6)
+        })
+        val debugOptions = listOf(false, true)
+        val debugGroup = RadioGroup(this).apply { orientation = RadioGroup.HORIZONTAL }
+        debugOptions.forEachIndexed { i, v ->
+            debugGroup.addView(RadioButton(this).apply {
+                id = i
+                text = if (v) "显示" else "隐藏（默认）"
+                textSize = 14f
+                isChecked = v == settings.showDebugOverlay
+            })
+        }
+        container.addView(debugGroup)
+
         // ---------- ④ 系统权限（M4 后台值守必需） ----------
         container.addView(TextView(this).apply {
             text = "\n系统权限（M4 后台值守必需）"
@@ -1465,6 +1502,9 @@ class MainActivity : AppCompatActivity() {
                 }
                 volumeOptions.getOrNull(volumeGroup.checkedRadioButtonId)?.let {
                     settings.alarmVolumePercent = it
+                }
+                debugOptions.getOrNull(debugGroup.checkedRadioButtonId)?.let {
+                    settings.showDebugOverlay = it
                 }
                 applyAllSettings()
 
@@ -1662,16 +1702,40 @@ class MainActivity : AppCompatActivity() {
             if (currentDetectIntervalMs >= Long.MAX_VALUE / 2) "已暂停"
             else "${currentDetectIntervalMs}ms"
 
-        binding.tvDiag.text = String.format(
-            Locale.US,
-            "状态：%s\n分辨率：%s\n帧率：%d fps\n夜视：%s\n识别：%s（间隔 %s）\n" +
-                "区域：%s | %s\n温度：%s\n已运行：%s",
-            stateText, resText, fps, lowLightSummary, detectText,
-            intervalText,
-            roiText, gateText,
-            thermalGuard.describe(thermalLevel),
-            formatDuration(uptimeSec)
+        // ---------- 状态胶囊：主界面上唯一的常驻信息 ----------
+        // 只放"现在能不能靠它"这一个判断所需的最少内容：
+        // 一个状态词 + 一个温度。其余全部进调试面板。
+        val (chipText, chipColorRes) = when {
+            camera == null -> "相机异常" to R.color.danger
+            thermalLevel == ThermalGuard.Level.PAUSED -> "已暂停识别" to R.color.danger
+            thermalLevel == ThermalGuard.Level.THROTTLED -> "降载中" to R.color.warning
+            else -> "值守中" to R.color.accent
+        }
+        binding.tvStatusPrimary.text = chipText
+        binding.tvStatusSecondary.text = String.format(
+            Locale.CHINA, "%.1f°C", thermalGuard.lastTemperatureC
+        ).takeIf { !thermalGuard.lastTemperatureC.isNaN() } ?: ""
+        binding.statusDot.background?.setTint(
+            ContextCompat.getColor(this, chipColorRes)
         )
+
+        // ---------- 调试面板：默认关闭 ----------
+        // 它是仪表不是界面。做长稳验收时在设置里打开。
+        if (settings.showDebugOverlay && !alarmController.isRinging) {
+            binding.tvDiag.visibility = View.VISIBLE
+            binding.tvDiag.text = String.format(
+                Locale.US,
+                "%s\n分辨率：%s\n帧率：%d fps\n夜视：%s\n识别：%s（间隔 %s）\n" +
+                    "区域：%s | %s\n温度：%s | %s\n已运行：%s",
+                stateText, resText, fps, lowLightSummary, detectText,
+                intervalText,
+                roiText, gateText,
+                thermalGuard.describe(thermalLevel), lastGateSummary,
+                formatDuration(uptimeSec)
+            )
+        } else {
+            binding.tvDiag.visibility = View.GONE
+        }
     }
 
     /** 秒 → HH:MM:SS */

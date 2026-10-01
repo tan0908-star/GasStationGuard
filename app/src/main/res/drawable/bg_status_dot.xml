@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    状态圆点。颜色由代码按状态设置（正常=青绿 / 注意=琥珀 / 异常=红）。
+
+    用圆点而不是图标是刻意的：
+    圆点没有语义负担，颜色本身就是全部信息，一眼就懂，不需要学习。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="oval">
+    <solid android:color="@color/accent" />
+</shape>

@@ -1,13 +1,26 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    M1 主界面：全屏相机预览。
+    ============================================================
+     值守主界面
+    ============================================================
 
-    布局极其简单，只有三层（从下到上）：
-      1. 黑色底       —— 相机没出画面时是黑的，不是花的
-      2. 相机预览     —— 铺满全屏
-      3. 诊断条/错误提示 —— 浮在预览上面
+    层级（从下到上）：
+      1. 黑色底
+      2. 相机预览            —— 铺满整屏，界面主体就是它
+      3. 检测框浮层
+      4. 监测区域浮层
+      5. 状态胶囊 + 调试面板 —— 唯一的常驻 UI
+      6. 温度警告横幅
+      7. 错误提示
+      8. 报警界面            —— 盖住一切
 
-    后续 M3 的「全屏红色闪烁报警」会作为第 4 层加在最上面。
+    ────────── 设计原则：界面要「退后」 ──────────
+    （注：XML 注释里不能出现 ASCII 的连续连字符，所以分隔线用的是制表符 ─）
+    这是一块盯着加油站入口的屏幕。任何装饰都是在挤占画面。
+    所以：
+      · 常驻 UI 只有左上角一颗胶囊，其余全部隐藏
+      · 不用彩色，层次靠半透明深底 + 一根细描边
+      · 诊断信息默认隐藏，需要时在设置里打开（它是仪表，不是界面）
 -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
@@ -16,14 +29,11 @@
     android:background="@android:color/black">
 
     <!--
-        相机预览控件。
-        keepScreenOn="true" ：只要这个界面在前台，屏幕就永不熄灭。
-        app:scaleType="fitCenter" ：
-            画面「完整显示、不裁切、不拉伸」，多余部分用黑边补齐。
-            ⚠️ 这里刻意不用 fillCenter（铺满会裁掉画面边缘）。
-            因为 M3 要在画面上框选「监测区域 ROI」，如果预览被裁切了，
-            你框的位置和相机真实看到的位置就对不上，会导致漏报。
-            宁可留黑边，也要保证「你看到的 = 相机看到的 = 模型分析的」。
+        相机预览。
+        app:scaleType="fitCenter" ：完整显示不裁切。
+        ⚠️ 不能用 fillCenter：那样会裁掉画面边缘，
+           而 M3 要在画面上框选监测区域 ——
+           一旦裁切，"你框的位置"和"相机真实看到的位置"就对不上，会导致漏报。
     -->
     <androidx.camera.view.PreviewView
         android:id="@+id/previewView"
@@ -32,96 +42,130 @@
         android:keepScreenOn="true"
         app:scaleType="fitCenter" />
 
-    <!--
-        检测结果浮层（M2 新增）。
-        它和 PreviewView 完全重叠，负责把识别到的车辆框画出来。
-        放在 PreviewView 后面 = 画在预览之上；放在诊断条前面 = 在诊断条之下。
-
-        它自己会按 fitCenter 的规则算出「画面在屏幕上的实际位置」，
-        所以必须知道画面的分辨率（由 YoloDetector 每帧回报）。
-    -->
+    <!-- 检测框浮层 -->
     <com.gasstation.guard.ui.DetectionOverlayView
         android:id="@+id/detectionOverlay"
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
 
-    <!--
-        监测区域（ROI）浮层（M3 新增）。
-        - 平时：把 ROI 之外的画面压暗，让"只看这块区域"一目了然
-        - 长按 2 秒：进入框选模式，拖动矩形，松手保存
-
-        它必须放在检测框浮层【之上】：
-        检测框是"识别到了什么"，ROI 是"我们只关心哪里"，后者优先级更高。
-    -->
+    <!-- 监测区域浮层：区域外压暗，长按 2 秒进入框选 -->
     <com.gasstation.guard.ui.RoiOverlayView
         android:id="@+id/roiOverlay"
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
 
     <!--
-        左上角诊断条（M1 的验证仪表，不是业务功能）。
-        显示：相机状态 / 实际分辨率 / 真实帧率 / 已运行时长。
-        没有它，你无法判断「画面是真在流动，还是卡死了」。
-        交付前可以直接删掉这个控件。
+        ============================================================
+         状态胶囊 —— 主界面上唯一的常驻元素
+        ============================================================
+
+        信息量控制在两个词以内：一个状态点 + 一句话。
+        详细数据（帧率、分辨率、间隔、闸门…）全部挪进下面的调试面板，
+        因为它们对使用者毫无意义，只对排障有意义。
+
+        长按 2 秒 = 打开设置（和框选、解除报警用的是同一个手势习惯）。
+    -->
+    <LinearLayout
+        android:id="@+id/statusChip"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|start"
+        android:layout_margin="@dimen/space_lg"
+        android:background="@drawable/bg_status_chip"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="@dimen/space_md"
+        android:paddingTop="@dimen/space_sm"
+        android:paddingEnd="@dimen/space_lg"
+        android:paddingBottom="@dimen/space_sm">
+
+        <View
+            android:id="@+id/statusDot"
+            android:layout_width="10dp"
+            android:layout_height="10dp"
+            android:background="@drawable/bg_status_dot" />
+
+        <TextView
+            android:id="@+id/tvStatusPrimary"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="@dimen/space_sm"
+            android:text="值守中"
+            android:textColor="@color/on_surface"
+            android:textSize="@dimen/text_body" />
+
+        <TextView
+            android:id="@+id/tvStatusSecondary"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="@dimen/space_sm"
+            android:text=""
+            android:textColor="@color/on_surface_variant"
+            android:textSize="@dimen/text_caption" />
+    </LinearLayout>
+
+    <!--
+        调试面板（默认隐藏，在设置里打开）。
+
+        ⚠️ 它是验收和排障用的仪表，不是给使用者看的界面。
+           正式交付前应该在设置里关掉 ——
+           一块满屏绿字会让用户以为"这个软件很复杂 / 出问题了"。
     -->
     <TextView
         android:id="@+id/tvDiag"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_gravity="top|start"
-        android:layout_margin="12dp"
-        android:background="#99000000"
+        android:layout_marginStart="@dimen/space_lg"
+        android:layout_marginTop="72dp"
+        android:background="@drawable/bg_debug_panel"
         android:fontFamily="monospace"
         android:lineSpacingExtra="2dp"
-        android:padding="10dp"
-        android:text="初始化中…"
-        android:textColor="#FF00FF88"
-        android:textSize="14sp" />
+        android:padding="@dimen/space_md"
+        android:text=""
+        android:textColor="@color/on_surface_variant"
+        android:textSize="11sp"
+        android:visibility="gone" />
 
-    <!--
-        温度警告横幅（M6）。
-
-        ⚠️ 这块不能省：温度降载或暂停会直接削弱识别能力，
-           如果默默降载，值班的人会以为一切正常，而实际上车可能已经漏了。
-           章程红线：禁止静默降级 —— 降级必须让人看得见。
-    -->
+    <!-- 温度警告横幅：降载/暂停时出现（禁止静默降级） -->
     <TextView
         android:id="@+id/tvThermalWarning"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_gravity="top|center_horizontal"
-        android:layout_marginTop="10dp"
-        android:background="#CC7A3E00"
+        android:layout_marginTop="@dimen/space_lg"
+        android:background="@drawable/bg_thermal_banner"
         android:gravity="center"
         android:lineSpacingExtra="3dp"
-        android:padding="10dp"
-        android:textColor="#FFFFD54F"
-        android:textSize="14sp"
+        android:padding="@dimen/space_md"
+        android:textColor="@color/warning"
+        android:textSize="@dimen/text_body"
         android:visibility="gone" />
 
-    <!--
-        红色错误提示（居中）。相机权限被拒 / 相机启动失败 / 相机被系统抢占时显示。
-        章程红线：禁止静默降级 —— 出任何问题都必须让人看得见。
-    -->
+    <!-- 错误提示（居中）：权限被拒 / 相机失败 / 系统抢占时显示 -->
     <TextView
         android:id="@+id/tvError"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_gravity="center"
-        android:background="#CC000000"
+        android:background="#E6141417"
         android:gravity="center"
         android:lineSpacingExtra="4dp"
-        android:padding="24dp"
-        android:textColor="#FFFF5252"
-        android:textSize="20sp"
+        android:padding="@dimen/space_xl"
+        android:textColor="@color/danger"
+        android:textSize="@dimen/text_subtitle"
         android:visibility="gone" />
 
     <!--
         ============================================================
-         强制报警界面（M3）—— 放在最上层，盖住一切
+         强制报警界面
         ============================================================
-        这一层出现时，屏幕上就只有它，且必须靠"长按 2 秒"才能关掉。
-        任何"点一下就关掉"的设计都是不能接受的 —— 那是漏报的直接来源。
+
+        ⚠️ 这一层刻意【不追求优雅】。
+        它的唯一任务是把人从睡梦里拽起来，所以：
+          · 保持全屏红色闪烁（不能改成"温和的提示"）
+          · 唯一的关闭方式是长按 2 秒（不能加"点一下关闭"）
+        这里做的只是"让它强烈得有设计感"，而不是"让它变温和"。
     -->
     <FrameLayout
         android:id="@+id/alarmOverlay"
@@ -129,12 +173,11 @@
         android:layout_height="match_parent"
         android:visibility="gone">
 
-        <!-- 红色闪烁层。alpha 由代码交替驱动 -->
         <View
             android:id="@+id/alarmFlash"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
-            android:background="#FFD32F2F" />
+            android:background="@color/alarm" />
 
         <LinearLayout
             android:layout_width="wrap_content"
@@ -147,52 +190,50 @@
                 android:id="@+id/tvAlarmTitle"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:shadowColor="#FF000000"
-                android:shadowDx="3"
-                android:shadowDy="3"
-                android:shadowRadius="8"
+                android:letterSpacing="0.04"
+                android:shadowColor="#99000000"
+                android:shadowDx="0"
+                android:shadowDy="4"
+                android:shadowRadius="12"
                 android:text="有车辆进入"
-                android:textColor="#FFFFFFFF"
-                android:textSize="34sp"
+                android:textColor="#FFFFFF"
+                android:textSize="@dimen/text_alarm"
                 android:textStyle="bold" />
 
             <TextView
                 android:id="@+id/tvAlarmSubtitle"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
-                android:shadowColor="#FF000000"
-                android:shadowDx="2"
+                android:layout_marginTop="@dimen/space_md"
+                android:gravity="center"
+                android:lineSpacingExtra="4dp"
+                android:shadowColor="#99000000"
+                android:shadowDx="0"
                 android:shadowDy="2"
-                android:shadowRadius="6"
+                android:shadowRadius="8"
                 android:text=""
-                android:textColor="#FFFFFFFF"
-                android:textSize="17sp" />
+                android:textColor="#F2FFFFFF"
+                android:textSize="@dimen/text_subtitle" />
 
             <com.gasstation.guard.ui.LongPressConfirmButton
                 android:id="@+id/btnImHere"
-                android:layout_width="440dp"
-                android:layout_height="104dp"
-                android:layout_marginTop="30dp" />
+                android:layout_width="@dimen/alarm_button_width"
+                android:layout_height="@dimen/alarm_button_height"
+                android:layout_marginTop="@dimen/space_2xl" />
         </LinearLayout>
 
-        <!--
-            三条报警通道的实时状态（铃声 / 震动 / 语音）。
-            刻意画在屏幕上而不是只写日志：这台手机的 ROM 会把应用日志冲掉，
-            排查"语音到底响没响"时 logcat 完全不可靠，截图才是证据。
-            正式交付前可以隐藏，但在夜班真机验收阶段它是很有用的仪表。
-        -->
+        <!-- 三条报警通道的实时状态。同样只在需要时看，做得轻 -->
         <TextView
             android:id="@+id/tvAlarmDiag"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_gravity="bottom|center_horizontal"
-            android:layout_marginBottom="16dp"
-            android:background="#99000000"
+            android:layout_marginBottom="@dimen/space_lg"
+            android:background="#80000000"
             android:fontFamily="monospace"
-            android:padding="8dp"
-            android:textColor="#FFFFFFFF"
-            android:textSize="13sp"
+            android:padding="@dimen/space_sm"
+            android:textColor="#B3FFFFFF"
+            android:textSize="11sp"
             android:visibility="gone" />
     </FrameLayout>
 

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    值守状态胶囊。
+
+    这是主界面上【唯一】常驻的元素，所以做得极轻：
+    半透明深底 + 一根细描边，靠"形状"而不是"颜色块"来界定边界。
+    深色界面上用实心色块会显得笨重。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="#CC141417" />
+    <corners android:radius="@dimen/radius_pill" />
+    <stroke
+        android:width="@dimen/stroke_hairline"
+        android:color="@color/outline" />
+</shape>

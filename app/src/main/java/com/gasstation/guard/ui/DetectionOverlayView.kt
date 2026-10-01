@@ -8,9 +8,10 @@ import android.graphics.RectF
 import android.graphics.Typeface
 import android.util.AttributeSet
 import android.view.View
+import androidx.core.content.ContextCompat
+import com.gasstation.guard.R
 import com.gasstation.guard.detect.Detection
 import com.gasstation.guard.detect.DetectionResult
-import kotlin.math.min
 
 /**
  * 检测结果浮层：把识别到的车辆框画在预览画面上。
@@ -59,10 +60,10 @@ class DetectionOverlayView @JvmOverloads constructor(
 
     private val density = resources.displayMetrics.density
 
-    /** 框线画笔 */
+    /** 框线画笔。细线 + 圆角，比粗直角线"贵"得多，也更不挡画面。 */
     private val boxPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
-        strokeWidth = 3f * density
+        strokeWidth = 2.5f * density
     }
 
     /** 标签底色画笔 */
@@ -70,21 +71,23 @@ class DetectionOverlayView @JvmOverloads constructor(
         style = Paint.Style.FILL
     }
 
-    /** 标签文字画笔 */
+    /** 标签文字画笔。用无衬线而不是等宽 —— 等宽在这里显得"工程感"太重。 */
     private val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.BLACK
-        textSize = 14f * density
-        typeface = Typeface.MONOSPACE
+        textSize = 13f * density
+        typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+        letterSpacing = 0.02f
     }
 
-    /** 调试框画笔（半透明白色细线） */
+    /** 调试框画笔（画面边界参考线，极细极淡） */
     private val debugPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeWidth = 1f * density
-        color = 0x66FFFFFF
+        color = 0x4DFFFFFF
     }
 
     private val labelRect = RectF()
+    private val boxRect = RectF()
 
     /** 主线程调用：送入新一帧的检测结果 */
     fun update(newResult: DetectionResult) {
@@ -122,29 +125,48 @@ class DetectionOverlayView @JvmOverloads constructor(
 
             val color = colorFor(d.classId)
             boxPaint.color = color
-            canvas.drawRect(left, top, right, bottom, boxPaint)
+            boxRect.set(left, top, right, bottom)
+            val r = 6f * density
+            canvas.drawRoundRect(boxRect, r, r, boxPaint)
 
-            // 标签：类别 + 置信度，画在框的上方（贴顶时改画在框内）
+            // 标签：类别 + 置信度，做成圆角小胶囊贴在框的左上角
             val text = "${d.label} ${(d.confidence * 100).toInt()}%"
             val textWidth = labelPaint.measureText(text)
             val textHeight = labelPaint.textSize
-            val pad = 4f * density
+            val padH = 8f * density
+            val padV = 4f * density
+            val chipHeight = textHeight + padV * 2
 
-            val labelTop = if (top - textHeight - pad * 2 < 0) top else top - textHeight - pad * 2
+            // 贴顶时把标签压在框内侧，避免被屏幕边缘切掉
+            val labelTop = if (top - chipHeight - 4f * density < 0f) {
+                top + 4f * density
+            } else {
+                top - chipHeight - 4f * density
+            }
 
-            labelRect.set(left, labelTop, left + textWidth + pad * 2, labelTop + textHeight + pad * 2)
+            labelRect.set(left, labelTop, left + textWidth + padH * 2, labelTop + chipHeight)
             labelBgPaint.color = color
-            canvas.drawRect(labelRect, labelBgPaint)
-            canvas.drawText(text, left + pad, labelRect.bottom - pad - labelPaint.descent(), labelPaint)
+            canvas.drawRoundRect(labelRect, chipHeight / 2f, chipHeight / 2f, labelBgPaint)
+            canvas.drawText(
+                text,
+                labelRect.left + padH,
+                labelRect.bottom - padV - labelPaint.descent(),
+                labelPaint
+            )
         }
     }
 
-    /** 每个类别一个颜色，方便一眼区分车型 */
+    /**
+     * 每个类别一个颜色，方便一眼区分车型。
+     *
+     * 色值统一取自 res/values/colors.xml —— 和状态胶囊、监测区域用的是同一套规范，
+     * 避免界面出现"两种不搭的绿色"这种廉价感。
+     */
     private fun colorFor(classId: Int): Int = when (classId) {
-        2 -> 0xFF00E676.toInt()   // car        绿
-        3 -> 0xFF00E5FF.toInt()   // motorcycle 青
-        5 -> 0xFF448AFF.toInt()   // bus        蓝
-        7 -> 0xFFFF9100.toInt()   // truck      橙
-        else -> 0xFFFFEB3B.toInt() // 其它       黄
+        2 -> ContextCompat.getColor(context, R.color.box_car)          // 汽车
+        3 -> ContextCompat.getColor(context, R.color.box_motorcycle)   // 摩托车
+        5 -> ContextCompat.getColor(context, R.color.box_bus)          // 客车
+        7 -> ContextCompat.getColor(context, R.color.box_truck)        // 卡车
+        else -> ContextCompat.getColor(context, R.color.box_other)
     }
 }
