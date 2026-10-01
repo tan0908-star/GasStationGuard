@@ -110,6 +110,16 @@ class SettingsStore(context: Context) {
         set(value) = prefs.edit().putInt(KEY_ALARM_VOLUME, value.coerceIn(30, 100)).apply()
 
     /**
+     * 是否已经看过首次使用教程。
+     *
+     * 首次安装打开时展示完整教程；之后只在"发现缺项"时才弹检查清单 ——
+     * 每次启动都糊一个教程弹窗出来，用户会烦到直接关掉应用。
+     */
+    var hasSeenOnboarding: Boolean
+        get() = prefs.getBoolean(KEY_SEEN_ONBOARDING, false)
+        set(value) = prefs.edit().putBoolean(KEY_SEEN_ONBOARDING, value).apply()
+
+    /**
      * 是否在值守界面上显示运行信息（帧率、分辨率、闸门状态、证据计数…）。
      *
      * 默认【关】。这块信息是给验收和排障用的仪表，不是给使用者看的界面 ——
@@ -204,6 +214,7 @@ class SettingsStore(context: Context) {
         private const val KEY_DETECT_INTERVAL = "detect_interval_ms"
         private const val KEY_CONF_THRESHOLD = "confidence_threshold"
         private const val KEY_ALARM_VOLUME = "alarm_volume_percent"
+        private const val KEY_SEEN_ONBOARDING = "seen_onboarding"
         private const val KEY_SHOW_DEBUG = "show_debug_overlay"
         private const val KEY_THROTTLE_TEMP = "throttle_temp_c"
         private const val KEY_PAUSE_TEMP = "pause_temp_c"

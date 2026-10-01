@@ -61,6 +61,9 @@ import com.gasstation.guard.evidence.EvidenceStore
 import com.gasstation.guard.service.MonitorService
 import com.gasstation.guard.service.WatchdogReceiver
 import com.gasstation.guard.alarm.VoiceAnnouncer
+import com.gasstation.guard.databinding.DialogReadinessBinding
+import com.gasstation.guard.databinding.ItemReadinessRowBinding
+import com.gasstation.guard.settings.ReadinessChecker
 import com.gasstation.guard.settings.SettingsStore
 import com.gasstation.guard.thermal.ThermalGuard
 import java.util.Locale
@@ -335,6 +338,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var thermalGuard: ThermalGuard
     private lateinit var voiceAnnouncer: VoiceAnnouncer
 
+    /** 值守就绪检查（M7）：启动时把缺的配置直接摆在用户面前 */
+    private lateinit var readinessChecker: ReadinessChecker
+
+    /** 用户点了「去处理」跳出去修配置——回到本界面时要重新检查一遍 */
+    private var awaitingFix = false
+
     /** 当前温控档位 */
     @Volatile
     private var thermalLevel = ThermalGuard.Level.NORMAL
@@ -487,6 +496,7 @@ class MainActivity : AppCompatActivity() {
 
         // ---------- M3：报警相关初始化 ----------
         settings = SettingsStore(this)
+        readinessChecker = ReadinessChecker(this, settings)
 
         // 读出已保存的监测区域（没设过就是整幅画面）
         roi = RoiRect(
@@ -578,6 +588,11 @@ class MainActivity : AppCompatActivity() {
         // M6：把设置里的参数（识别频率 / 灵敏度 / 音量 / 温控阈值）应用上去
         applyAllSettings()
 
+        // ---------- M7：启动就绪检查 ----------
+        // 延后 2 秒弹，先让相机画面出来 —— 一进来就糊一个弹窗，
+        // 用户第一眼看到的是"这软件怎么这么多要求"而不是"它在看着我门口"。
+        uiHandler.postDelayed({ checkReadinessOnLaunch() }, 2_000L)
+
         // 启动每秒刷新的诊断条
         uiHandler.post(ticker)
 
@@ -586,6 +601,16 @@ class MainActivity : AppCompatActivity() {
             startCamera()
         } else {
             permissionLauncher.launch(Manifest.permission.CAMERA)
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // 用户刚去系统设置里改过东西，回来立刻重新检查一遍，
+        // 把"已修好的打勾、还没修的留着"直接呈现出来 —— 形成闭环。
+        if (awaitingFix) {
+            awaitingFix = false
+            uiHandler.postDelayed({ showReadinessDialog(firstRun = false) }, 600L)
         }
     }
 
@@ -1483,6 +1508,11 @@ class MainActivity : AppCompatActivity() {
         settingsDialog = AlertDialog.Builder(this)
             .setTitle("设置")
             .setView(scroll)
+            // 「使用说明」放在中性按钮上：它既不是"确认"也不是"取消"，
+            // 放在这里用户随时能翻出来看，又不会占据主要位置。
+            .setNeutralButton("使用说明") { _, _ ->
+                showReadinessDialog(firstRun = true)
+            }
             .setPositiveButton("保存") { _, _ ->
                 settings.emergencyPhone = phoneInput.text.toString()
 
@@ -1513,6 +1543,131 @@ class MainActivity : AppCompatActivity() {
             .setNegativeButton("取消", null)
             .create()
             .also { it.show() }
+    }
+
+    // ============================================================
+    //  值守就绪检查与使用教程（M7）
+    // ============================================================
+
+    /**
+     * 启动时的判断：
+     *   首次安装 → 弹完整教程
+     *   之后     → 只在发现缺项时弹
+     *
+     * 为什么不能每次都弹：用户会烦到直接养成"看到弹窗就关"的习惯，
+     * 那样真正缺项时他也会关掉 —— 保护就失效了。
+     */
+    private fun checkReadinessOnLaunch() {
+        if (isFinishing || isDestroyed) return
+        val firstRun = !settings.hasSeenOnboarding
+        val missing = readinessChecker.missingCount()
+
+        if (firstRun) {
+            Log.i(TAG, "首次启动，展示使用教程")
+            showReadinessDialog(firstRun = true)
+        } else if (missing > 0) {
+            Log.w(TAG, "启动自检发现 $missing 项未就绪")
+            showReadinessDialog(firstRun = false)
+        }
+    }
+
+    /**
+     * 展示「值守准备」对话框。
+     *
+     * @param firstRun true = 首次安装，展示完整教程文案；false = 只展示检查清单
+     */
+    private fun showReadinessDialog(firstRun: Boolean) {
+        val items = readinessChecker.check()
+        val dialogBinding = DialogReadinessBinding.inflate(layoutInflater)
+
+        val intro = if (firstRun) {
+            settings.hasSeenOnboarding = true
+            "这个应用会在有车辆进入监测区域时强制报警：" +
+                "响铃 + 震动 + 中文语音播报，必须长按「已到岗」才能解除。\n\n" +
+                "为保证关键时刻真的能叫醒人，下面几项必须就绪。"
+        } else {
+            "启动自检发现下面几项还没就绪。\n\n" +
+                "这些项目任何一项缺失都不会让界面报错，" +
+                "但会让它在关键时刻不起作用 —— 请尽快补上。"
+        }
+
+        var dialog: AlertDialog? = null
+        dialogBinding.checkList.removeAllViews()
+
+        items.forEach { item ->
+            val row = ItemReadinessRowBinding.inflate(
+                layoutInflater, dialogBinding.checkList, false
+            )
+            row.tvMark.text = if (item.ok) "✓" else "✗"
+            row.tvMark.setTextColor(
+                ContextCompat.getColor(this, if (item.ok) R.color.accent else R.color.danger)
+            )
+            row.tvItemTitle.text = item.title
+            row.tvItemWhy.text = item.why
+
+            if (item.ok) {
+                // 已就绪的项不显示按钮，但保留说明 —— 让用户知道"这一项是干什么的"
+                row.btnFix.visibility = View.GONE
+            } else {
+                row.btnFix.setOnClickListener {
+                    dialog?.dismiss()
+                    awaitingFix = true
+                    handleFix(item.fix)
+                }
+            }
+            dialogBinding.checkList.addView(row.root)
+        }
+
+        dialog = AlertDialog.Builder(this)
+            .setTitle(if (firstRun) "使用说明 · 值守准备" else "值守未就绪")
+            .setMessage(intro)
+            .setView(dialogBinding.root)
+            .setPositiveButton("我知道了", null)
+            .create()
+            .also { it.show() }
+    }
+
+    /** 把就绪检查里的一项缺项转成具体动作 */
+    private fun handleFix(fix: ReadinessChecker.Fix) {
+        when (fix) {
+            ReadinessChecker.Fix.CAMERA_PERM ->
+                permissionLauncher.launch(Manifest.permission.CAMERA)
+
+            ReadinessChecker.Fix.CALL_PERM ->
+                callPermissionLauncher.launch(Manifest.permission.CALL_PHONE)
+
+            ReadinessChecker.Fix.NOTIFICATION_PERM ->
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                }
+
+            ReadinessChecker.Fix.OVERLAY_PERM ->
+                openSystemSettings(
+                    Intent(
+                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:$packageName")
+                    ),
+                    "打开失败，请手动到：设置 → 应用 → 应用管理 → 加油站车辆报警 → " +
+                        "特殊访问权限 → 显示在其他应用上层"
+                )
+
+            ReadinessChecker.Fix.BATTERY_OPT ->
+                openSystemSettings(
+                    Intent(
+                        Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                        Uri.parse("package:$packageName")
+                    ),
+                    "打开失败，请手动到：设置 → 电池 → 更多电池设置 → 应用耗电管理"
+                )
+
+            // 这两项没有对应的系统页面，只能回到应用内解决
+            ReadinessChecker.Fix.PHONE_NUMBER -> showSettingsDialog()
+
+            ReadinessChecker.Fix.ROI ->
+                uiHandler.postDelayed({ binding.roiOverlay.startCalibration() }, 400L)
+
+            ReadinessChecker.Fix.NONE -> Unit
+        }
     }
 
     // ============================================================

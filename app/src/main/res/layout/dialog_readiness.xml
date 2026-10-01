@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    ============================================================
+     值守准备 / 使用说明
+    ============================================================
+
+    两种时机都会用到它：
+      · 第一次安装打开（完整教程）
+      · 每次启动时如果发现缺项（只把缺的列出来）
+
+    内容编排原则：**先说后果，再说操作**。
+    用户不关心"为什么要授权"，他只关心"不做会怎样"。
+-->
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:scrollbars="vertical">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingStart="@dimen/space_xl"
+        android:paddingTop="@dimen/space_lg"
+        android:paddingEnd="@dimen/space_xl"
+        android:paddingBottom="@dimen/space_sm">
+
+        <!--
+            介绍文字不放在这里，而是交给 AlertDialog 的 message 区。
+
+            真实踩过的坑：把一段多行文字放在 ScrollView 的开头，
+            再用 setView() 塞进 AlertDialog，那段文字会【完全不渲染】——
+            AlertDialog 自己也会包一层滚动容器，两层嵌套时测量出问题。
+            实测第一版就是这样，标题下面直接跳到"就绪检查"，介绍整段不见了。
+
+            改用 setMessage() 承载介绍文字后正常显示，而且语义更对：
+            介绍本来就是"对话框的说明"，不是"自定义视图的一部分"。
+        -->
+
+        <!-- 检查清单：每行由代码动态填充 item_readiness_row -->
+        <TextView
+            android:id="@+id/tvCheckHeader"
+            style="@style/Text.GasGuard.SectionLabel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/space_md"
+            android:text="就绪检查" />
+
+        <View
+            style="@style/Widget.GasGuard.Divider"
+            android:layout_marginTop="@dimen/space_sm" />
+
+        <LinearLayout
+            android:id="@+id/checkList"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical" />
+
+        <!-- 系统设置：荣耀/华为手机必做 -->
+        <TextView
+            android:id="@+id/tvSystemHeader"
+            style="@style/Text.GasGuard.SectionLabel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/space_xl"
+            android:text="荣耀 / 华为手机必须手动配置（否则后台会被系统杀掉）" />
+
+        <View
+            style="@style/Widget.GasGuard.Divider"
+            android:layout_marginTop="@dimen/space_sm" />
+
+        <TextView
+            android:id="@+id/tvSystemSteps"
+            style="@style/Text.GasGuard.ItemHint"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/space_md"
+            android:lineSpacingExtra="6dp"
+            android:text="① 设置 → 应用 → 应用启动管理 → 找到本应用 → 关掉「自动管理」，弹出的三个开关全部打开\n\n② 打开最近任务 → 找到本应用卡片 → 下拉 → 点锁图标\n\n③ 设置 → 声音和振动 → 勿扰模式 → 允许例外 → 打开「闹钟」（否则静音/勿扰时报警不会响）\n\n④ 建议关掉锁屏密码：否则手机重启后必须有人解锁，应用才能恢复值守" />
+
+        <!-- 日常使用 -->
+        <TextView
+            android:id="@+id/tvUsageHeader"
+            style="@style/Text.GasGuard.SectionLabel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/space_xl"
+            android:text="日常使用" />
+
+        <View
+            style="@style/Widget.GasGuard.Divider"
+            android:layout_marginTop="@dimen/space_sm" />
+
+        <TextView
+            android:id="@+id/tvUsage"
+            style="@style/Text.GasGuard.ItemHint"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/space_md"
+            android:lineSpacingExtra="6dp"
+            android:text="· 长按左上角的状态胶囊 2 秒 → 打开设置\n\n· 长按画面 2 秒后拖动 → 框选监测区域（只框车辆会经过的地面，不要框进马路和树）\n\n· 报警时长按「已到岗」→ 解除报警\n\n· 设置里可以随时删除告警录像、导出记录" />
+
+    </LinearLayout>
+</ScrollView>
