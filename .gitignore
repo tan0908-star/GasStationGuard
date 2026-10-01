@@ -13,3 +13,13 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# ---- M2：模型导出过程中的中间产物 ----
+# 注意：最终产物 app/src/main/assets/yolo_int8.tflite 是要提交进仓库的，
+# 否则别人 clone 下来编译不出能跑的 App。
+*.pt
+*.onnx
+*.torchscript
+*.mlpackage
+runs/
+

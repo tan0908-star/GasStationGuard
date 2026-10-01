@@ -33,6 +33,19 @@
         app:scaleType="fitCenter" />
 
     <!--
+        检测结果浮层（M2 新增）。
+        它和 PreviewView 完全重叠，负责把识别到的车辆框画出来。
+        放在 PreviewView 后面 = 画在预览之上；放在诊断条前面 = 在诊断条之下。
+
+        它自己会按 fitCenter 的规则算出「画面在屏幕上的实际位置」，
+        所以必须知道画面的分辨率（由 YoloDetector 每帧回报）。
+    -->
+    <com.gasstation.guard.ui.DetectionOverlayView
+        android:id="@+id/detectionOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <!--
         左上角诊断条（M1 的验证仪表，不是业务功能）。
         显示：相机状态 / 实际分辨率 / 真实帧率 / 已运行时长。
         没有它，你无法判断「画面是真在流动，还是卡死了」。

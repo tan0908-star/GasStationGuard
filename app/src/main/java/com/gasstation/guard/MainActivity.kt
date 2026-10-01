@@ -9,6 +9,7 @@ import android.hardware.camera2.CaptureRequest
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import android.util.Range
 import android.util.Size
@@ -33,6 +34,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.LiveData
 import com.gasstation.guard.databinding.ActivityMainBinding
+import com.gasstation.guard.detect.YoloDetector
 import java.util.Locale
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -73,6 +75,17 @@ class MainActivity : AppCompatActivity() {
 
         /** 相机异常后的自动重试间隔（毫秒） */
         private const val RETRY_DELAY_MS = 5_000L
+
+        /**
+         * 两次推理之间的最小间隔（毫秒）。
+         *
+         * 相机每秒出 30 帧，但【完全没必要】每帧都跑模型：
+         *  - 车辆驶入是个持续几秒的过程，每秒看 2 次足够发现
+         *  - 推理很吃 CPU 和电，跑满会让手机发烫（M6 的温控问题）
+         *  - 章程本身就规划了 1~5 fps 的低帧率工作模式
+         * 现在固定 500ms（2 fps），M6 会改成按电池温度自适应。
+         */
+        private const val DETECT_INTERVAL_MS = 500L
     }
 
     /**
@@ -182,6 +195,28 @@ class MainActivity : AppCompatActivity() {
     private var lowLightSummary = "待定"
 
     // ============================================================
+    //  车辆识别（M2）
+    // ============================================================
+
+    /**
+     * YOLO 检测器。模型有十几 MB，加载需要时间，所以放在后台线程里初始化，
+     * 加载完成前这里是 null —— 相机预览不受影响，先出画面再出识别框。
+     */
+    @Volatile
+    private var detector: YoloDetector? = null
+
+    /** 上一次执行推理的时刻，用来限制推理频率 */
+    private var lastDetectAtMs = 0L
+
+    /** 最近一次推理检出的目标数量，显示在诊断条上 */
+    @Volatile
+    private var lastDetectionCount = 0
+
+    /** 最近一次推理的耗时（毫秒） */
+    @Volatile
+    private var lastInferenceMs = 0L
+
+    // ============================================================
     //  诊断仪表（M1 的验证工具，不是业务功能）
     // ============================================================
 
@@ -244,6 +279,24 @@ class MainActivity : AppCompatActivity() {
 
         cameraExecutor = Executors.newSingleThreadExecutor()
 
+        // ---------- M2：车辆识别模型加载 ----------
+        // 模型十几 MB，放主线程会卡住启动。丢到相机线程池里初始化：
+        // 相机预览先出来，模型加载完再开始画框，互不阻塞。
+        cameraExecutor.execute {
+            try {
+                detector = YoloDetector(this)
+            } catch (t: Throwable) {
+                Log.e(TAG, "车辆识别模型加载失败", t)
+                uiHandler.post {
+                    showError(
+                        "识别模型加载失败：${t.message}\n\n" +
+                            "请确认 app/src/main/assets/yolo_int8.tflite 存在，\n" +
+                            "并且 app/build.gradle.kts 里有 noCompress += \"tflite\"。"
+                    )
+                }
+            }
+        }
+
         // 启动每秒刷新的诊断条
         uiHandler.post(ticker)
 
@@ -280,6 +333,11 @@ class MainActivity : AppCompatActivity() {
         cameraProvider?.unbindAll()
         cameraProvider = null
         camera = null
+        // 让关闭动作排在推理任务之后执行，避免线程竞争
+        cameraExecutor.execute {
+            detector?.close()
+            detector = null
+        }
         cameraExecutor.shutdown()
         Log.i(TAG, "MainActivity 销毁，相机已释放")
     }
@@ -360,7 +418,42 @@ class MainActivity : AppCompatActivity() {
                         imageAnalysis.setAnalyzer(cameraExecutor) { imageProxy ->
                             actualWidth = imageProxy.width
                             actualHeight = imageProxy.height
+                            // 心跳计数器【每帧】都记：它反映的是"相机还活着吗"，
+                            // 不能被下面的推理限流影响，否则诊断条就骗人了。
                             frameCounter.incrementAndGet()
+
+                            // ---------- 车辆识别（M2）----------
+                            // 推理按间隔限流，省电控温（M6 会按电池温度自适应）。
+                            val now = SystemClock.elapsedRealtime()
+                            val activeDetector = detector
+                            if (activeDetector != null &&
+                                now - lastDetectAtMs >= DETECT_INTERVAL_MS
+                            ) {
+                                lastDetectAtMs = now
+                                try {
+                                    // ImageProxy → Bitmap（CameraX 帮我们做格式转换）
+                                    val frame = imageProxy.toBitmap()
+                                    val result = activeDetector.detect(
+                                        frame,
+                                        imageProxy.imageInfo.rotationDegrees
+                                    )
+                                    frame.recycle()          // 立刻回收，减轻 GC 压力
+
+                                    lastDetectionCount = result.detections.size
+                                    lastInferenceMs = result.inferenceMs
+
+                                    // 画框必须回主线程：View 不是线程安全的
+                                    uiHandler.post {
+                                        if (!isFinishing && !isDestroyed) {
+                                            binding.detectionOverlay.update(result)
+                                        }
+                                    }
+                                } catch (t: Throwable) {
+                                    // 单帧推理失败绝不能拖垮整个值守：记下来，跳过这帧
+                                    Log.e(TAG, "推理失败，跳过本帧", t)
+                                }
+                            }
+
                             imageProxy.close()   // 必须关闭，否则相机停止出帧
                         }
                     }
@@ -544,10 +637,19 @@ class MainActivity : AppCompatActivity() {
         val uptimeSec =
             if (boundAtMs > 0) (System.currentTimeMillis() - boundAtMs) / 1000 else 0L
 
+        // 识别状态：模型还在加载 / 检出了几个目标 / 单帧耗时
+        val detectText = if (detector == null) {
+            "模型加载中…"
+        } else if (lastDetectionCount > 0) {
+            "检出 $lastDetectionCount 个 (${lastInferenceMs}ms)"
+        } else {
+            "无目标 (${lastInferenceMs}ms)"
+        }
+
         binding.tvDiag.text = String.format(
             Locale.US,
-            "状态：%s\n分辨率：%s\n帧率：%d fps\n夜视：%s\n已运行：%s",
-            stateText, resText, fps, lowLightSummary, formatDuration(uptimeSec)
+            "状态：%s\n分辨率：%s\n帧率：%d fps\n夜视：%s\n识别：%s\n已运行：%s",
+            stateText, resText, fps, lowLightSummary, detectText, formatDuration(uptimeSec)
         )
     }
 

@@ -10,6 +10,13 @@ activityKtx = "1.8.0"
 constraintlayout = "2.1.4"
 # CameraX 统一版本号：M1 预览、M2 推理都靠它。将来升级只改这一行。
 camerax = "1.4.1"
+# LiteRT（TensorFlow Lite 的现代后继者）。
+# 用 1.4.2 而不是最新的 2.2.0：2.x 把运行时拆成了 litert 和 litert-api
+# 两个模块，但两者声明了【同一个 namespace】，AGP 的清单合并会直接报错：
+#   "Namespace 'com.google.ai.edge.litert' is used in multiple modules"
+# 1.4.2 是单模块，没有这个问题，同时保留了经典的
+# org.tensorflow.lite.Interpreter API。
+litert = "1.4.2"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -30,6 +37,9 @@ androidx-camera-core = { group = "androidx.camera", name = "camera-core", versio
 androidx-camera-camera2 = { group = "androidx.camera", name = "camera-camera2", version.ref = "camerax" }
 androidx-camera-lifecycle = { group = "androidx.camera", name = "camera-lifecycle", version.ref = "camerax" }
 androidx-camera-view = { group = "androidx.camera", name = "camera-view", version.ref = "camerax" }
+
+# ---------- LiteRT / TFLite（M2 新增）----------
+litert = { group = "com.google.ai.edge.litert", name = "litert", version.ref = "litert" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

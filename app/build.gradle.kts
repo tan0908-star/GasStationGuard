@@ -53,6 +53,14 @@ android {
     buildFeatures {
         viewBinding = true
     }
+
+    // M2 改动：assets 里的 .tflite 必须【不压缩】。
+    // AGP 默认会压缩 assets，被压缩的文件无法用 AssetManager.openFd() 映射成
+    // 文件描述符，TFLite 加载时会直接抛异常。
+    // 加了这一行，模型才能用零拷贝的方式映射进内存。
+    androidResources {
+        noCompress += "tflite"
+    }
 }
 
 dependencies {
@@ -67,6 +75,9 @@ dependencies {
     implementation(libs.androidx.camera.camera2)
     implementation(libs.androidx.camera.lifecycle)
     implementation(libs.androidx.camera.view)
+
+    // M2 改动 ④：LiteRT（TFLite）推理引擎
+    implementation(libs.litert)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.espresso.core)
