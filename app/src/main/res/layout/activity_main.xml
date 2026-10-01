@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    M1 主界面：全屏相机预览。
+
+    布局极其简单，只有三层（从下到上）：
+      1. 黑色底       —— 相机没出画面时是黑的，不是花的
+      2. 相机预览     —— 铺满全屏
+      3. 诊断条/错误提示 —— 浮在预览上面
+
+    后续 M3 的「全屏红色闪烁报警」会作为第 4 层加在最上面。
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@android:color/black">
+
+    <!--
+        相机预览控件。
+        keepScreenOn="true" ：只要这个界面在前台，屏幕就永不熄灭。
+        app:scaleType="fitCenter" ：
+            画面「完整显示、不裁切、不拉伸」，多余部分用黑边补齐。
+            ⚠️ 这里刻意不用 fillCenter（铺满会裁掉画面边缘）。
+            因为 M3 要在画面上框选「监测区域 ROI」，如果预览被裁切了，
+            你框的位置和相机真实看到的位置就对不上，会导致漏报。
+            宁可留黑边，也要保证「你看到的 = 相机看到的 = 模型分析的」。
+    -->
+    <androidx.camera.view.PreviewView
+        android:id="@+id/previewView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:keepScreenOn="true"
+        app:scaleType="fitCenter" />
+
+    <!--
+        左上角诊断条（M1 的验证仪表，不是业务功能）。
+        显示：相机状态 / 实际分辨率 / 真实帧率 / 已运行时长。
+        没有它，你无法判断「画面是真在流动，还是卡死了」。
+        交付前可以直接删掉这个控件。
+    -->
+    <TextView
+        android:id="@+id/tvDiag"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|start"
+        android:layout_margin="12dp"
+        android:background="#99000000"
+        android:fontFamily="monospace"
+        android:lineSpacingExtra="2dp"
+        android:padding="10dp"
+        android:text="初始化中…"
+        android:textColor="#FF00FF88"
+        android:textSize="14sp" />
+
+    <!--
+        红色错误提示（居中）。相机权限被拒 / 相机启动失败 / 相机被系统抢占时显示。
+        章程红线：禁止静默降级 —— 出任何问题都必须让人看得见。
+    -->
+    <TextView
+        android:id="@+id/tvError"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:background="#CC000000"
+        android:gravity="center"
+        android:lineSpacingExtra="4dp"
+        android:padding="24dp"
+        android:textColor="#FFFF5252"
+        android:textSize="20sp"
+        android:visibility="gone" />
+
+</FrameLayout>

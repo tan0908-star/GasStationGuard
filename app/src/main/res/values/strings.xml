@@ -1,0 +1,4 @@
+<resources>
+    <!-- 手机桌面上显示的名字。要让你母亲一眼认出这是干什么的。 -->
+    <string name="app_name">加油站车辆报警</string>
+</resources>

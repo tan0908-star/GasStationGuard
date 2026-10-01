@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!--
+        夜班值守专用主题。
+
+        刻意选 parent="Theme.Material3.Dark.NoActionBar" 而不是 DayNight：
+          - DayNight 会跟随系统在「白天变白底」，夜间看去一片惨白，刺眼。
+          - NoActionBar 去掉标题栏，让相机画面能铺满整块屏幕。
+
+        注意：本项目已【删除】res/values-night/themes.xml。
+        因为这里已经是固定的深色主题，不再需要夜间变体；
+        留着它反而会在系统深色模式下覆盖掉这里的设置。
+    -->
+    <style name="Theme.GasStationGuard" parent="Theme.Material3.Dark.NoActionBar">
+        <item name="android:windowBackground">@android:color/black</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+
+</resources>

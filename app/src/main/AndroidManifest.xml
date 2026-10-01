@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    应用清单：声明权限、声明 Activity、声明横屏锁定。
+    整个项目里「系统能看见什么」都在这个文件写清楚。
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- 相机权限：M1 的预览、M2 的识别都依赖它。
+         这是本应用唯一需要的敏感权限。 -->
+    <uses-permission android:name="android.permission.CAMERA" />
+
+    <!-- 声明「本应用必须要有摄像头」。荣耀 200 有后置摄像头，满足。
+         required="true" 意味着没有摄像头的设备装不上，
+         这符合预期——没有相机的设备装它没有意义。 -->
+    <uses-feature
+        android:name="android.hardware.camera.any"
+        android:required="true" />
+
+    <application
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.GasStationGuard">
+
+        <!--
+            加油站夜班值守的主界面。
+
+            screenOrientation="landscape"
+                → 锁定横屏。手机固定横置在支架上，绝不允许画面自己旋转。
+                  （Android 16 有「大屏强制忽略横竖屏锁定」的改动，但那条只对
+                   最小宽度 ≥600dp 的设备生效；荣耀 200 的最小宽度约 400dp，
+                   不受影响，横屏锁定依然有效。）
+
+            configChanges="..."
+                → 系统配置变化时不重建 Activity。
+                  否则任何一次旋转/尺寸变化都会把相机整个重启一遍。
+
+            launchMode="singleTask"
+                → 桌面上重复点击图标不会产生第二个实例（两个实例会抢摄像头）。
+
+            allowBackup="false"（在 application 上）
+                → 彻底关闭系统云备份，保证「不上传任何数据」这条红线。
+        -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:screenOrientation="landscape"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|uiMode"
+            android:theme="@style/Theme.GasStationGuard">
+
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+    </application>
+
+</manifest>
