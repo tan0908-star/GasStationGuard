@@ -42,6 +42,34 @@ class SettingsStore(context: Context) {
         set(value) = prefs.edit().putBoolean(KEY_AUTO_DIAL, value).apply()
 
     // ============================================================
+    //  解除报警的长按时长
+    // ============================================================
+
+    /**
+     * 按住「已到岗」多久才算解除（秒）。
+     *
+     * ⚠️ 这个值直接影响**会不会漏报**，不是普通的体验参数：
+     *
+     *   设得太短 → 报警时屏幕在闪、手机在震，人半梦半醒手忙脚乱，
+     *              手掌擦过屏幕就解除了 —— 人还没真正醒，报警没了。
+     *              **误触解除 = 漏报**，是项目章程里的头号红线。
+     *
+     *   设得太长 → 真到岗了却按不掉，人会烦躁，甚至直接强制关掉 App，
+     *              那样更糟。
+     *
+     * 所以下限被硬性限制在 [MIN_HOLD_SECONDS]，默认 2.0 秒。
+     */
+    var dismissHoldSeconds: Float
+        get() = prefs.getFloat(KEY_HOLD_SECONDS, DEFAULT_HOLD_SECONDS)
+            .coerceIn(MIN_HOLD_SECONDS, MAX_HOLD_SECONDS)
+        set(value) = prefs.edit()
+            .putFloat(
+                KEY_HOLD_SECONDS,
+                value.coerceIn(MIN_HOLD_SECONDS, MAX_HOLD_SECONDS)
+            )
+            .apply()
+
+    // ============================================================
     //  监测区域 ROI（归一化坐标 0~1，相对【摆正后】的画面）
     // ============================================================
 
@@ -93,6 +121,20 @@ class SettingsStore(context: Context) {
         private const val KEY_PHONE = "emergency_phone"
         private const val KEY_DIAL_DELAY = "auto_dial_delay_seconds"
         private const val KEY_AUTO_DIAL = "auto_dial_enabled"
+
+        private const val KEY_HOLD_SECONDS = "dismiss_hold_seconds"
+
+        /** 默认长按 2 秒 */
+        private const val DEFAULT_HOLD_SECONDS = 2.0f
+
+        /**
+         * 长按时长的下限（秒）。
+         * 低于 1 秒，报警时手掌/衣袖擦过屏幕就能解除 —— 那是漏报的直接来源，不允许。
+         */
+        const val MIN_HOLD_SECONDS = 1.0f
+
+        /** 上限：再长就纯粹是折磨人了 */
+        const val MAX_HOLD_SECONDS = 5.0f
 
         private const val KEY_ROI_SET = "roi_set"
         private const val KEY_ROI_L = "roi_left"

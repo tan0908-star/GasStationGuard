@@ -97,6 +97,16 @@ class LongPressConfirmButton @JvmOverloads constructor(
 
     private val rect = RectF()
 
+    /** 长按时长的显示文本：整数秒不带小数点，小数保留一位 */
+    private fun holdSecondsLabel(): String {
+        val seconds = holdMillis / 1000f
+        return if (seconds == seconds.toInt().toFloat()) {
+            seconds.toInt().toString()
+        } else {
+            String.format(java.util.Locale.US, "%.1f", seconds)
+        }
+    }
+
     /** 当前按压进度 0f~1f，供绘制与外部观察 */
     val progress: Float
         get() = if (!pressing) 0f
@@ -163,7 +173,8 @@ class LongPressConfirmButton @JvmOverloads constructor(
         val cy = height / 2f
         canvas.drawText("已到岗", cx, cy + 2f * density, titlePaint)
         canvas.drawText(
-            if (pressing) "松手即取消，按满 2 秒生效" else "长按 2 秒 · 我在这里",
+            if (pressing) "松手即取消，按满 ${holdSecondsLabel()} 秒生效"
+            else "长按 ${holdSecondsLabel()} 秒 · 我在这里",
             cx, cy + 22f * density, hintPaint
         )
     }

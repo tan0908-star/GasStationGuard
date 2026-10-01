@@ -20,6 +20,10 @@ import android.view.View
 import android.view.WindowManager
 import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.LinearLayout
+import android.widget.RadioButton
+import android.widget.RadioGroup
+import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
@@ -389,14 +393,14 @@ class MainActivity : AppCompatActivity() {
             onEscalateDial = { number -> dialEmergencyNumber(number) }
         )
 
-        // 「已到岗」长按 2 秒解除报警
-        binding.btnImHere.holdMillis = 2_000L
+        // 「已到岗」长按解除报警（时长可在设置里调，默认 2 秒）
+        applyHoldDuration()
         binding.btnImHere.onConfirmed = { dismissAlarm() }
 
-        // 长按左上角诊断条 = 打开紧急号码设置
+        // 长按左上角诊断条 = 打开设置
         // （M6 会做成正式的隐藏设置页，这里是 M3 的最小可用入口）
         binding.tvDiag.setOnLongClickListener {
-            showEmergencyPhoneDialog()
+            showSettingsDialog()
             true
         }
 
@@ -785,6 +789,8 @@ class MainActivity : AppCompatActivity() {
         // 报警时藏起左上角诊断条：实测它会和报警文字叠在一起，看着像画面坏了，
         // 而人在半梦半醒时最不需要的就是"这个屏幕是不是出故障了"的困惑。
         binding.tvDiag.visibility = View.GONE
+        // 长按时长以设置里的当前值为准（用户可能刚改过）
+        applyHoldDuration()
         startFlash()
 
         // 调试触发时把拨号延时拉长，避免自动化测试误拨真实号码
@@ -879,31 +885,103 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * 紧急号码设置对话框。
+     * 设置对话框：紧急号码 + 解除报警的长按时长。
      *
      * 入口：长按左上角信息条。
      * M3 阶段的最小可用入口，M6 会做成正式的隐藏设置页。
      */
-    private fun showEmergencyPhoneDialog() {
-        val input = EditText(this).apply {
+    private fun showSettingsDialog() {
+        // 刻意做得紧凑：手机是【横屏】的，屏幕高度只有约 436dp，
+        // 第一次做成竖排单选项时，"2 秒（推荐）"被挤到对话框外面完全看不见 ——
+        // 用户能看到的只有「1 秒」和「1.5 秒」，恰恰是我最不希望被选中的两个。
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(48, 20, 48, 4)
+        }
+
+        // ---------- ① 紧急联系电话 ----------
+        container.addView(TextView(this).apply {
+            text = "紧急联系电话"
+            textSize = 16f
+        })
+        container.addView(TextView(this).apply {
+            text = "报警 30 秒无人解除时自动拨打。留空 = 不拨号。"
+            textSize = 12f
+            setPadding(0, 2, 0, 8)
+        })
+        val phoneInput = EditText(this).apply {
             hint = "例如 13800138000"
             setText(settings.emergencyPhone)
             inputType = android.text.InputType.TYPE_CLASS_PHONE
-            setPadding(48, 32, 48, 32)
+            textSize = 16f
         }
+        container.addView(phoneInput)
+
+        // ---------- ② 解除报警的长按时长 ----------
+        container.addView(TextView(this).apply {
+            text = "解除报警的长按时长"
+            textSize = 16f
+            setPadding(0, 20, 0, 2)
+        })
+        container.addView(TextView(this).apply {
+            // 这行警告不是客套话：误触解除 = 漏报，是项目章程里的头号红线。
+            text = "⚠ 设得太短，报警时手擦过屏幕就误解除 —— 那就是漏报"
+            textSize = 12f
+            setTextColor(0xFFFF6D00.toInt())
+            setPadding(0, 0, 0, 8)
+        })
+
+        val choices = listOf(1.0f, 1.5f, 2.0f, 3.0f, 5.0f)
+        // 横向排布，省掉大量竖向空间（横屏下高度是最稀缺的资源）
+        val radioGroup = RadioGroup(this).apply {
+            orientation = RadioGroup.HORIZONTAL
+        }
+        choices.forEachIndexed { index, seconds ->
+            val label = buildString {
+                // ⚠️ Kotlin 里中文字符是合法的标识符字符，
+                //    所以 "$seconds秒" 会被当成变量名 seconds秒 而编译失败。
+                //    紧跟中文时必须用 ${} 包起来。
+                append(
+                    if (seconds == seconds.toInt().toFloat()) "${seconds.toInt()}秒"
+                    else "${seconds}秒"
+                )
+                if (seconds == 2.0f) append("★")
+            }
+            radioGroup.addView(RadioButton(this).apply {
+                id = index
+                text = label
+                textSize = 15f
+                isChecked = seconds == settings.dismissHoldSeconds
+            })
+        }
+        container.addView(radioGroup)
+        container.addView(TextView(this).apply {
+            text = "★ = 推荐（2 秒）。最短只允许 1 秒。"
+            textSize = 12f
+            setPadding(0, 0, 0, 4)
+        })
+
         AlertDialog.Builder(this)
-            .setTitle("紧急联系电话")
-            .setMessage(
-                "报警 30 秒无人解除时，自动拨打这个号码。\n\n" +
-                    "留空 = 不拨号，但报警界面上会明确提示「号码未设置」。"
-            )
-            .setView(input)
+            .setTitle("设置")
+            .setView(container)
             .setPositiveButton("保存") { _, _ ->
-                settings.emergencyPhone = input.text.toString()
-                Log.i(TAG, "紧急号码已更新")
+                settings.emergencyPhone = phoneInput.text.toString()
+
+                val picked = choices.getOrNull(radioGroup.checkedRadioButtonId)
+                    ?: settings.dismissHoldSeconds
+                settings.dismissHoldSeconds = picked
+
+                // 立刻生效，不用等下次报警
+                applyHoldDuration()
+                Log.i(TAG, "设置已更新：长按时长 ${settings.dismissHoldSeconds} 秒")
             }
             .setNegativeButton("取消", null)
             .show()
+    }
+
+    /** 把设置里的长按时长应用到「已到岗」按钮上 */
+    private fun applyHoldDuration() {
+        binding.btnImHere.holdMillis = (settings.dismissHoldSeconds * 1000f).toLong()
     }
 
     // ============================================================
