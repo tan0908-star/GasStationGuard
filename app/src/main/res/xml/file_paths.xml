@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    FileProvider 的共享路径白名单。
+
+    只开放 cache 目录 —— "一键导出"生成的 zip 就放在这里。
+    刻意【不】开放证据目录本身：
+    共享出去的是打好包的快照，而不是把整个录像目录的访问权交出去。
+-->
+<paths>
+    <cache-path
+        name="exports"
+        path="." />
+</paths>

@@ -44,16 +44,20 @@ import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.LiveData
 import com.gasstation.guard.alarm.AlarmController
 import com.gasstation.guard.databinding.ActivityMainBinding
+import com.gasstation.guard.detect.Detection
 import com.gasstation.guard.detect.DetectionGate
 import com.gasstation.guard.detect.RoiRect
 import com.gasstation.guard.detect.YoloDetector
 import com.gasstation.guard.detect.isInsideRoi
+import com.gasstation.guard.evidence.EvidenceRecorder
+import com.gasstation.guard.evidence.EvidenceStore
 import com.gasstation.guard.service.MonitorService
 import com.gasstation.guard.service.WatchdogReceiver
 import com.gasstation.guard.settings.SettingsStore
@@ -124,6 +128,14 @@ class MainActivity : AppCompatActivity() {
 
         /** 给值守服务发心跳的间隔。服务那边 45 秒收不到心跳才会认为界面挂了。 */
         private const val SERVICE_HEARTBEAT_INTERVAL_MS = 10_000L
+
+        /**
+         * 调试触发报警的延迟（M5）。
+         *
+         * 要留够时间让相机启动、模型加载、**以及告警录像的环形缓冲填满** ——
+         * 否则"报警前"那段画面是空的，取证功能等于没测到。
+         */
+        private const val DEBUG_ALARM_DELAY_MS = 20_000L
     }
 
     /**
@@ -298,6 +310,17 @@ class MainActivity : AppCompatActivity() {
     @Volatile
     private var lastGateSummary = "-"
 
+    /** 最近一帧的检出结果，报警时写进告警详情 */
+    @Volatile
+    private var lastDetections: List<Detection> = emptyList()
+
+    // ============================================================
+    //  告警证据（M5）
+    // ============================================================
+
+    private lateinit var evidenceStore: EvidenceStore
+    private lateinit var evidenceRecorder: EvidenceRecorder
+
     // ============================================================
     //  值守看门狗（M4）
     // ============================================================
@@ -412,6 +435,21 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        // ---------- M5：告警证据 ----------
+        evidenceStore = EvidenceStore(this)
+        evidenceRecorder = EvidenceRecorder(
+            context = this,
+            store = evidenceStore,
+            onSessionSaved = { dir, videoOk ->
+                Log.i(TAG, "告警证据已保存：${dir.name}（视频${if (videoOk) "正常" else "编码失败"}）")
+            }
+        )
+        // 启动时清理过期记录（7 天前）。放后台线程，别拖慢启动。
+        cameraExecutor.execute {
+            val removed = evidenceStore.cleanupExpired()
+            Log.i(TAG, "启动清理：删除 $removed 个过期告警目录")
+        }
+
         // ---------- M3：报警相关初始化 ----------
         settings = SettingsStore(this)
 
@@ -486,11 +524,13 @@ class MainActivity : AppCompatActivity() {
         // 外部应用无法通过 Intent 触发假报警。
         // 用法：adb shell am start -n com.gasstation.guard/.MainActivity --ez debug_alarm true
         if (BuildConfig.DEBUG && intent?.getBooleanExtra("debug_alarm", false) == true) {
+            // 延迟 20 秒再触发：要给相机启动、模型加载、环形缓冲填满留出时间。
+            // 太早触发的话"报警前"那一帧都没有，测不出取证功能到底有没有用。
             uiHandler.postDelayed({
                 Log.w(TAG, "【仅调试】通过 Intent 触发一次报警自测（拨号延时已拉长到 5 分钟）")
                 debugTriggeredAlarm = true
                 startAlarm()
-            }, 2_000L)
+            }, DEBUG_ALARM_DELAY_MS)
         }
 
         // 启动每秒刷新的诊断条
@@ -539,6 +579,10 @@ class MainActivity : AppCompatActivity() {
         cameraExecutor.execute {
             detector?.close()
             detector = null
+        }
+        if (::evidenceRecorder.isInitialized) {
+            // 正常退出时应该已经 finishAlarm 了；这里兜底，避免留下半截录制
+            evidenceRecorder.shutdown()
         }
         cameraExecutor.shutdown()
         Log.i(TAG, "MainActivity 销毁，相机已释放")
@@ -639,10 +683,21 @@ class MainActivity : AppCompatActivity() {
                                         frame,
                                         imageProxy.imageInfo.rotationDegrees
                                     )
+                                    // ---------- M5：喂给告警录像器 ----------
+                                    // 每一帧都喂，这样报警时才能倒出"报警前"的画面。
+                                    // 内部会缩到 640x360 再压缩，开销很小。
+                                    //
+                                    // ⚠️⚠️ 这一句【必须】在 frame.recycle() 之前 ⚠️⚠️
+                                    // 真实踩过：一开始写在 recycle 之后，结果传进去的是
+                                    // 已经回收的 Bitmap，压缩 100% 失败 —— 而且不报错，
+                                    // 只是证据目录建好了、里面一帧都没有（静默失效）。
+                                    evidenceRecorder.offerFrame(frame)
+
                                     frame.recycle()          // 立刻回收，减轻 GC 压力
 
                                     lastDetectionCount = result.detections.size
                                     lastInferenceMs = result.inferenceMs
+                                    lastDetections = result.detections
 
                                     // ---------- M3：ROI 过滤 + 多帧确认 ----------
                                     // ① 只有【落在监测区域内】的目标才算数。
@@ -914,6 +969,10 @@ class MainActivity : AppCompatActivity() {
         applyHoldDuration()
         startFlash()
 
+        // M5：开始记录告警证据。会把环形缓冲里"报警前"的画面一起倒出来 ——
+        // 那几秒才是车真正开进来的过程，等报警响了再录就晚了。
+        evidenceRecorder.beginAlarm(lastDetections)
+
         // 调试触发时把拨号延时拉长，避免自动化测试误拨真实号码
         val dialDelay = if (debugTriggeredAlarm) DEBUG_DIAL_DELAY_SECONDS
         else settings.autoDialDelaySeconds
@@ -937,6 +996,9 @@ class MainActivity : AppCompatActivity() {
 
         // 通知闸门：等画面清空之后才重新武装，避免同一个目标反复触发
         gate.onAlarmDismissed()
+
+        // M5：结束取证。会再补录几秒才开始编码，编码在后台线程做。
+        evidenceRecorder.finishAlarm()
     }
 
     /** 红色闪烁：亮 0.4 秒 ↔ 暗 0.4 秒，无限循环 */
@@ -1127,8 +1189,46 @@ class MainActivity : AppCompatActivity() {
             setPadding(0, 8, 0, 0)
         })
 
-        // ---------- ④ 退出值守 ----------
+        // 设置对话框自身的引用：下面几个按钮点完要先关掉对话框
         var settingsDialog: AlertDialog? = null
+
+        // ---------- ④ 告警记录（M5） ----------
+        container.addView(TextView(this).apply {
+            text = "\n告警记录"
+            textSize = 16f
+            setPadding(0, 20, 0, 2)
+        })
+        val evidenceInfo = TextView(this).apply {
+            text = evidenceSummary()
+            textSize = 12f
+        }
+        container.addView(evidenceInfo)
+
+        container.addView(Button(this).apply {
+            text = "导出全部记录（打包分享）"
+            setOnClickListener {
+                settingsDialog?.dismiss()
+                exportEvidence()
+            }
+        })
+        container.addView(Button(this).apply {
+            text = "删除全部记录"
+            setTextColor(0xFFD32F2F.toInt())
+            setOnClickListener {
+                confirmDeleteEvidence {
+                    evidenceStore.deleteAll()
+                    evidenceInfo.text = evidenceSummary()
+                }
+            }
+        })
+        container.addView(TextView(this).apply {
+            text = "录到顾客或无关画面时，可以随时在这里清掉；" +
+                "没清的话超过 ${EvidenceStore.RETENTION_DAYS} 天也会自动删除。"
+            textSize = 12f
+            setPadding(0, 4, 0, 12)
+        })
+
+        // ---------- ⑤ 退出值守 ----------
         container.addView(Button(this).apply {
             text = "退出值守"
             setTextColor(0xFFD32F2F.toInt())
@@ -1158,6 +1258,63 @@ class MainActivity : AppCompatActivity() {
             .setNegativeButton("取消", null)
             .create()
             .also { it.show() }
+    }
+
+    // ============================================================
+    //  告警记录（M5）
+    // ============================================================
+
+    private fun evidenceSummary(): String =
+        "已有 ${evidenceStore.sessionCount()} 次记录，占用 ${evidenceStore.usedSizeText()}\n" +
+            "超过 ${EvidenceStore.RETENTION_DAYS} 天自动清理；也可随时手动删除。"
+
+    /**
+     * 导出全部告警记录。
+     *
+     * 打包成 zip 后走系统分享，用户可以发到微信/邮件，或存到网盘。
+     * 直接访问 /Android/data 目录在 Android 11+ 上被系统限制，
+     * 分享是唯一对普通用户友好的出口。
+     */
+    private fun exportEvidence() {
+        val zip = evidenceStore.buildExportZip()
+        if (zip == null) {
+            showError("还没有任何告警记录可以导出。")
+            return
+        }
+        try {
+            val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", zip)
+            val intent = Intent(Intent.ACTION_SEND).apply {
+                type = "application/zip"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                putExtra(Intent.EXTRA_SUBJECT, "加油站值守告警记录")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            startActivity(Intent.createChooser(intent, "导出告警记录"))
+        } catch (t: Throwable) {
+            Log.e(TAG, "导出告警记录失败", t)
+            showError("导出失败：${t.message}")
+        }
+    }
+
+    private fun confirmDeleteEvidence(onDeleted: () -> Unit) {
+        val count = evidenceStore.sessionCount()
+        if (count == 0) {
+            showError("目前没有任何告警记录。")
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle("删除全部告警记录？")
+            .setMessage(
+                "将删除 $count 次记录，共 ${evidenceStore.usedSizeText()}。\n\n" +
+                    "删除后无法恢复。"
+            )
+            .setPositiveButton("确认删除") { _, _ ->
+                Log.w(TAG, "用户手动清空告警记录")
+                evidenceStore.deleteAll()
+                onDeleted()
+            }
+            .setNegativeButton("取消", null)
+            .show()
     }
 
     // ============================================================
@@ -1277,7 +1434,8 @@ class MainActivity : AppCompatActivity() {
 
         // 报警中：在报警界面上实时显示三条通道的状态
         if (alarmController.isRinging) {
-            binding.tvAlarmDiag.text = alarmController.diagnosticSummary()
+            binding.tvAlarmDiag.text =
+                alarmController.diagnosticSummary() + "\n证据：" + evidenceRecorder.debugSummary()
             binding.tvAlarmDiag.visibility = View.VISIBLE
         } else {
             binding.tvAlarmDiag.visibility = View.GONE

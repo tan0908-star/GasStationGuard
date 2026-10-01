@@ -103,6 +103,17 @@ class EvidenceStore(private val context: Context) {
     /** 已有多少次告警记录 */
     fun sessionCount(): Int = rootDir.listFiles()?.count { it.isDirectory } ?: 0
 
+    /** 人类可读的占用空间，例如 "12.3 MB" */
+    fun usedSizeText(): String {
+        val bytes = usedBytes()
+        return when {
+            bytes >= 1024L * 1024 * 1024 -> "%.2f GB".format(bytes / 1024.0 / 1024 / 1024)
+            bytes >= 1024L * 1024 -> "%.1f MB".format(bytes / 1024.0 / 1024)
+            bytes >= 1024L -> "%.0f KB".format(bytes / 1024.0)
+            else -> "$bytes B"
+        }
+    }
+
     /** 是否存在"今天"之外的旧数据（用于提示用户） */
     fun hasExpiredData(retentionDays: Int = RETENTION_DAYS): Boolean {
         val cutoff = System.currentTimeMillis() - retentionDays * 24L * 60 * 60 * 1000
@@ -112,6 +123,78 @@ class EvidenceStore(private val context: Context) {
             val parsed = parseTimestamp(dir.name) ?: return@any false
             parsed < cutoff && parsed < todayStart
         } ?: false
+    }
+
+    // ============================================================
+    //  手动删除
+    // ============================================================
+
+    /**
+     * 删除全部告警记录。
+     *
+     * 为什么必须提供这个功能：录到的画面里可能出现顾客、车牌、无关路人。
+     * 值班的人应该能自己随手清掉，而不是必须等满 7 天才自动消失。
+     *
+     * @return 删掉的目录个数
+     */
+    fun deleteAll(): Int {
+        var removed = 0
+        rootDir.listFiles()?.forEach { entry ->
+            val ok = entry.deleteRecursively()
+            if (ok) removed++ else Log.w(TAG, "删除失败：${entry.name}")
+        }
+        Log.i(TAG, "已手动清空告警记录，共 $removed 项")
+        return removed
+    }
+
+    /** 删除最近一次告警记录（误报时随手清掉） */
+    fun deleteLatest(): File? {
+        val latest = rootDir.listFiles()
+            ?.filter { it.isDirectory }
+            ?.maxByOrNull { parseTimestamp(it.name) ?: 0L }
+            ?: return null
+        return if (latest.deleteRecursively()) {
+            Log.i(TAG, "已删除最近一次告警记录：${latest.name}")
+            latest
+        } else {
+            Log.w(TAG, "删除最近记录失败：${latest.name}")
+            null
+        }
+    }
+
+    // ============================================================
+    //  导出
+    // ============================================================
+
+    /**
+     * 把所有告警记录打包成一个 zip，供"一键导出"分享出去。
+     *
+     * 放在 cache 目录：它会被系统在空间不足时自动回收，不需要用户操心。
+     */
+    fun buildExportZip(): File? {
+        val sessions = rootDir.listFiles()?.filter { it.isDirectory } ?: return null
+        if (sessions.isEmpty()) return null
+
+        val out = File(context.cacheDir, "gas_guard_evidence.zip")
+        if (out.exists()) out.delete()
+
+        return try {
+            java.util.zip.ZipOutputStream(out.outputStream().buffered()).use { zip ->
+                sessions.forEach { dir ->
+                    dir.listFiles()?.forEach { file ->
+                        zip.putNextEntry(java.util.zip.ZipEntry("${dir.name}/${file.name}"))
+                        file.inputStream().use { it.copyTo(zip) }
+                        zip.closeEntry()
+                    }
+                }
+            }
+            Log.i(TAG, "已打包 ${sessions.size} 次告警记录：${out.length() / 1024} KB")
+            out
+        } catch (t: Throwable) {
+            Log.e(TAG, "打包告警记录失败", t)
+            out.delete()
+            null
+        }
     }
 
     private fun parseTimestamp(name: String): Long? = try {

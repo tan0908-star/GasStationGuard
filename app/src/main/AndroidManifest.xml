@@ -110,6 +110,23 @@
         </service>
 
         <!--
+            文件共享（M5）：「一键导出」把告警记录打包成 zip，
+            通过 FileProvider 分享给微信/邮件等应用。
+
+            authorities 用 ${applicationId} 拼出来，避免和别的应用冲突。
+            只开放 cache 目录，见 res/xml/file_paths.xml。
+        -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
+        <!--
             外部看门狗（M4 兜底）。
             exported="false"：这个广播只由我们自己的 PendingIntent 发出，
             不允许其它应用触发（否则任意应用都能反复拉起我们，白白耗电）。
