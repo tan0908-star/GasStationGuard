@@ -55,6 +55,7 @@ import com.gasstation.guard.detect.RoiRect
 import com.gasstation.guard.detect.YoloDetector
 import com.gasstation.guard.detect.isInsideRoi
 import com.gasstation.guard.service.MonitorService
+import com.gasstation.guard.service.WatchdogReceiver
 import com.gasstation.guard.settings.SettingsStore
 import java.util.Locale
 import java.util.concurrent.ExecutorService
@@ -1126,10 +1127,21 @@ class MainActivity : AppCompatActivity() {
             setPadding(0, 8, 0, 0)
         })
 
+        // ---------- ④ 退出值守 ----------
+        var settingsDialog: AlertDialog? = null
+        container.addView(Button(this).apply {
+            text = "退出值守"
+            setTextColor(0xFFD32F2F.toInt())
+            setOnClickListener {
+                settingsDialog?.dismiss()
+                confirmExitMonitoring()
+            }
+        })
+
         // 内容变多了，包一层 ScrollView，避免横屏下又被挤出屏幕外
         val scroll = ScrollView(this).apply { addView(container) }
 
-        AlertDialog.Builder(this)
+        settingsDialog = AlertDialog.Builder(this)
             .setTitle("设置")
             .setView(scroll)
             .setPositiveButton("保存") { _, _ ->
@@ -1144,7 +1156,53 @@ class MainActivity : AppCompatActivity() {
                 Log.i(TAG, "设置已更新：长按时长 ${settings.dismissHoldSeconds} 秒")
             }
             .setNegativeButton("取消", null)
+            .create()
+            .also { it.show() }
+    }
+
+    // ============================================================
+    //  退出值守
+    // ============================================================
+
+    /**
+     * 二次确认。
+     *
+     * 退出的后果必须说清楚 —— 对夜班值守来说，"以为还在守、其实已经关了"
+     * 比"关不掉"危险得多。
+     */
+    private fun confirmExitMonitoring() {
+        AlertDialog.Builder(this)
+            .setTitle("退出值守？")
+            .setMessage(
+                "退出后将【停止监视加油站入口】，不会再有任何识别和报警。\n\n" +
+                    "需要重新值守时，请再打开本应用。"
+            )
+            .setPositiveButton("确认退出") { _, _ -> exitMonitoring() }
+            .setNegativeButton("继续值守", null)
             .show()
+    }
+
+    /**
+     * 真正退出。
+     *
+     * ⚠️ 顺序不能错，错了会出现"用户以为退出了、其实还在跑"的情况：
+     *
+     *   ① 先解除外部看门狗闹钟 —— 否则 5 分钟后它会把服务重新拉起来
+     *   ② 再停止前台服务 —— stopService 会同时取消 START_STICKY 的重启
+     *   ③ 最后关闭界面 —— 如果先关界面，服务的界面看门狗 45 秒后会把界面拉回来
+     */
+    private fun exitMonitoring() {
+        Log.w(TAG, "用户主动退出值守")
+
+        WatchdogReceiver.disarm(this)
+
+        try {
+            stopService(Intent(this, MonitorService::class.java))
+        } catch (t: Throwable) {
+            Log.e(TAG, "停止值守服务失败", t)
+        }
+
+        finishAndRemoveTask()
     }
 
     /**

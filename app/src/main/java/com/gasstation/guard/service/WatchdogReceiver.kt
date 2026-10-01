@@ -49,6 +49,32 @@ class WatchdogReceiver : BroadcastReceiver() {
         /** 外部看门狗的间隔。太长则恢复慢，太短则无谓耗电。 */
         const val INTERVAL_MS = 5 * 60 * 1000L
 
+        /**
+         * 解除布防。
+         *
+         * ⚠️ 用户主动"退出值守"时必须调用，否则 5 分钟后闹钟到期，
+         *    系统会把应用重新拉起来 —— 用户以为退出了，其实没有，
+         *    而且界面上没有任何提示。
+         */
+        fun disarm(context: Context) {
+            try {
+                val intent = Intent(context, WatchdogReceiver::class.java)
+                val pending = PendingIntent.getBroadcast(
+                    context,
+                    3,
+                    intent,
+                    PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+                )
+                val alarmManager =
+                    context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+                alarmManager.cancel(pending)
+                pending.cancel()
+                Log.i(TAG, "外部看门狗已解除布防")
+            } catch (t: Throwable) {
+                Log.e(TAG, "解除外部看门狗失败", t)
+            }
+        }
+
         /** 布防（或重新布防）外部看门狗 */
         fun arm(context: Context) {
             try {
