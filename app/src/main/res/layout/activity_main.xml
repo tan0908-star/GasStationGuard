@@ -79,6 +79,27 @@
         android:textSize="14sp" />
 
     <!--
+        温度警告横幅（M6）。
+
+        ⚠️ 这块不能省：温度降载或暂停会直接削弱识别能力，
+           如果默默降载，值班的人会以为一切正常，而实际上车可能已经漏了。
+           章程红线：禁止静默降级 —— 降级必须让人看得见。
+    -->
+    <TextView
+        android:id="@+id/tvThermalWarning"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|center_horizontal"
+        android:layout_marginTop="10dp"
+        android:background="#CC7A3E00"
+        android:gravity="center"
+        android:lineSpacingExtra="3dp"
+        android:padding="10dp"
+        android:textColor="#FFFFD54F"
+        android:textSize="14sp"
+        android:visibility="gone" />
+
+    <!--
         红色错误提示（居中）。相机权限被拒 / 相机启动失败 / 相机被系统抢占时显示。
         章程红线：禁止静默降级 —— 出任何问题都必须让人看得见。
     -->

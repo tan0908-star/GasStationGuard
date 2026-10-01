@@ -61,6 +61,17 @@ class YoloDetector(context: Context) {
         private const val MODEL_ASSET = "yolo_int8.tflite"
 
         /**
+         * 置信度阈值。M6 起由设置页控制，所以是可变属性而不是常量。
+         *
+         * 放在 companion 里是有意的：全局只有一个检测器，用全局属性最简单，
+         * 设置页改完立刻对下一次推理生效，不需要重启相机或重建检测器。
+         *
+         * ⚠️ 调低 = 更容易报警但误报变多；调高 = 更少误报但夜间可能漏车。
+         */
+        @Volatile
+        var confThreshold: Float = DEFAULT_CONF_THRESHOLD
+
+        /**
          * 只关心这 4 类。键是 COCO 的类别索引。
          * 其余 76 类（人、狗、椅子…）即使置信度再高也一律丢弃 ——
          * 夜班值守关心的只有车。
@@ -72,8 +83,8 @@ class YoloDetector(context: Context) {
             7 to "卡车"
         )
 
-        /** 置信度阈值：低于它直接丢弃 */
-        private const val CONF_THRESHOLD = 0.35f
+        /** 置信度阈值默认值（M6 起可在设置里调） */
+        private const val DEFAULT_CONF_THRESHOLD = 0.35f
 
         /** NMS 的 IoU 阈值：两个同类框重叠超过它就认为是同一个目标 */
         private const val IOU_THRESHOLD = 0.45f
@@ -348,7 +359,7 @@ class YoloDetector(context: Context) {
                     bestClass = classId
                 }
             }
-            if (bestClass < 0 || bestScore < CONF_THRESHOLD) continue
+            if (bestClass < 0 || bestScore < confThreshold) continue
 
             // 框参数：cx, cy, w, h
             //

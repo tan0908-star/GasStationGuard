@@ -140,6 +140,25 @@ class RoiOverlayView @JvmOverloads constructor(
         invalidate()
     }
 
+    /**
+     * 从设置页手动进入框选模式。
+     *
+     * 除了"长按画面 2 秒"之外再提供一个显式入口：
+     * 长按是对的方向（防误触），但第一次配置的人不一定想得到，
+     * 设置里给个按钮能省掉一轮"我该怎么弄"的困惑。
+     */
+    fun startCalibration() {
+        if (calibrating) return
+        calibrating = true
+        // 起点先放在画面中心，用户一按一拖就成型
+        downX = width / 2f
+        downY = height / 2f
+        dragX = downX
+        dragY = downY
+        onCalibrationChanged?.invoke(true)
+        invalidate()
+    }
+
     fun cancelCalibration() {
         if (!calibrating) return
         calibrating = false

@@ -70,6 +70,58 @@ class SettingsStore(context: Context) {
             .apply()
 
     // ============================================================
+    //  M6：识别与温控参数
+    // ============================================================
+
+    /**
+     * 识别频率（毫秒/次）。
+     *
+     * ⚠️ 这一项直接决定"多久看一次画面"：
+     *    调得太稀（比如 2000ms）会明显增加漏报风险 ——
+     *    一辆快速开过的车可能只出现在一两帧里。
+     *    默认 500ms（2fps）是经过权衡的。
+     */
+    var detectIntervalMs: Long
+        get() = prefs.getLong(KEY_DETECT_INTERVAL, DEFAULT_DETECT_INTERVAL_MS)
+            .coerceIn(MIN_DETECT_INTERVAL_MS, MAX_DETECT_INTERVAL_MS)
+        set(value) = prefs.edit()
+            .putLong(KEY_DETECT_INTERVAL, value.coerceIn(MIN_DETECT_INTERVAL_MS, MAX_DETECT_INTERVAL_MS))
+            .apply()
+
+    /**
+     * 置信度阈值。
+     *
+     * ⚠️ 调低 = 更容易触发报警，但误报变多；
+     *    调高 = 更少误报，但可能漏掉夜间模糊的车辆。
+     *    M2 阶段实测 0.35 在白天表现良好。
+     */
+    var confidenceThreshold: Float
+        get() = prefs.getFloat(KEY_CONF_THRESHOLD, DEFAULT_CONF).coerceIn(0.15f, 0.75f)
+        set(value) = prefs.edit().putFloat(KEY_CONF_THRESHOLD, value.coerceIn(0.15f, 0.75f)).apply()
+
+    /**
+     * 报警音量（占闹钟最大音量的百分比）。
+     *
+     * 默认 100%。刻意允许调低，但界面上会提示风险 ——
+     * 夜班场景下，音量每降一档，叫醒成功率就低一档。
+     */
+    var alarmVolumePercent: Int
+        get() = prefs.getInt(KEY_ALARM_VOLUME, 100).coerceIn(30, 100)
+        set(value) = prefs.edit().putInt(KEY_ALARM_VOLUME, value.coerceIn(30, 100)).apply()
+
+    /** 降载温度阈值（°C） */
+    var throttleTempC: Float
+        get() = prefs.getFloat(KEY_THROTTLE_TEMP, 45f).coerceIn(38f, 60f)
+        set(value) = prefs.edit().putFloat(KEY_THROTTLE_TEMP, value.coerceIn(38f, 60f)).apply()
+
+    /** 暂停温度阈值（°C）。强制比降载阈值高，否则两级会重叠。 */
+    var pauseTempC: Float
+        get() = prefs.getFloat(KEY_PAUSE_TEMP, 50f).coerceIn(40f, 65f)
+        set(value) = prefs.edit()
+            .putFloat(KEY_PAUSE_TEMP, maxOf(value, throttleTempC + 2f).coerceIn(40f, 65f))
+            .apply()
+
+    // ============================================================
     //  监测区域 ROI（归一化坐标 0~1，相对【摆正后】的画面）
     // ============================================================
 
@@ -135,6 +187,27 @@ class SettingsStore(context: Context) {
 
         /** 上限：再长就纯粹是折磨人了 */
         const val MAX_HOLD_SECONDS = 5.0f
+
+        // ---------- M6 ----------
+        private const val KEY_DETECT_INTERVAL = "detect_interval_ms"
+        private const val KEY_CONF_THRESHOLD = "confidence_threshold"
+        private const val KEY_ALARM_VOLUME = "alarm_volume_percent"
+        private const val KEY_THROTTLE_TEMP = "throttle_temp_c"
+        private const val KEY_PAUSE_TEMP = "pause_temp_c"
+
+        /** 默认 500ms（2fps） */
+        private const val DEFAULT_DETECT_INTERVAL_MS = 500L
+
+        /** 识别频率的硬性下限：再快就是浪费电，模型也跑不过来 */
+        const val MIN_DETECT_INTERVAL_MS = 300L
+
+        /**
+         * 识别频率的硬性上限：2000ms（0.5fps）。
+         * 再稀就会明显漏车 —— 不提供这个选项。
+         */
+        const val MAX_DETECT_INTERVAL_MS = 2000L
+
+        private const val DEFAULT_CONF = 0.35f
 
         private const val KEY_ROI_SET = "roi_set"
         private const val KEY_ROI_L = "roi_left"

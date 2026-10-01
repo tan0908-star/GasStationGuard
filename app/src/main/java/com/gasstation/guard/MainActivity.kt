@@ -60,7 +60,9 @@ import com.gasstation.guard.evidence.EvidenceRecorder
 import com.gasstation.guard.evidence.EvidenceStore
 import com.gasstation.guard.service.MonitorService
 import com.gasstation.guard.service.WatchdogReceiver
+import com.gasstation.guard.alarm.VoiceAnnouncer
 import com.gasstation.guard.settings.SettingsStore
+import com.gasstation.guard.thermal.ThermalGuard
 import java.util.Locale
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -136,6 +138,11 @@ class MainActivity : AppCompatActivity() {
          * 否则"报警前"那段画面是空的，取证功能等于没测到。
          */
         private const val DEBUG_ALARM_DELAY_MS = 20_000L
+
+        // ---------- M6 温控 ----------
+
+        /** 每多少秒检查一次温度。温度变化很慢，每秒查是浪费。 */
+        private const val THERMAL_CHECK_INTERVAL_S = 5
     }
 
     /**
@@ -322,6 +329,29 @@ class MainActivity : AppCompatActivity() {
     private lateinit var evidenceRecorder: EvidenceRecorder
 
     // ============================================================
+    //  温控（M6）
+    // ============================================================
+
+    private lateinit var thermalGuard: ThermalGuard
+    private lateinit var voiceAnnouncer: VoiceAnnouncer
+
+    /** 当前温控档位 */
+    @Volatile
+    private var thermalLevel = ThermalGuard.Level.NORMAL
+
+    /** 温度检查的秒计数（每若干秒查一次就够，温度变化很慢） */
+    private var thermalTickCounter = 0
+
+    /**
+     * 当前生效的识别间隔（毫秒）。
+     *
+     * 会随温控档位动态变化 —— 这是"自适应帧率"的实现点。
+     * 用 @Volatile 是因为 analyze 线程要读它。
+     */
+    @Volatile
+    private var currentDetectIntervalMs = 500L
+
+    // ============================================================
     //  值守看门狗（M4）
     // ============================================================
 
@@ -358,6 +388,7 @@ class MainActivity : AppCompatActivity() {
             updateDiag()
             checkCameraWatchdog()
             reportHeartbeatToService()
+            tickThermal()
             uiHandler.postDelayed(this, 1_000L)
         }
     }
@@ -434,6 +465,10 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+
+        // ---------- M6：温控与语音播报 ----------
+        thermalGuard = ThermalGuard(this)
+        voiceAnnouncer = VoiceAnnouncer(this)
 
         // ---------- M5：告警证据 ----------
         evidenceStore = EvidenceStore(this)
@@ -532,6 +567,9 @@ class MainActivity : AppCompatActivity() {
                 startAlarm()
             }, DEBUG_ALARM_DELAY_MS)
         }
+
+        // M6：把设置里的参数（识别频率 / 灵敏度 / 音量 / 温控阈值）应用上去
+        applyAllSettings()
 
         // 启动每秒刷新的诊断条
         uiHandler.post(ticker)
@@ -672,8 +710,11 @@ class MainActivity : AppCompatActivity() {
                             // 推理按间隔限流，省电控温（M6 会按电池温度自适应）。
                             val now = SystemClock.elapsedRealtime()
                             val activeDetector = detector
+                            // M6：识别间隔由温控动态决定 ——
+                            // 温度正常时是设置的频率，降载时自动变稀，
+                            // 暂停时是 Long.MAX_VALUE（也就是这一帧直接跳过）
                             if (activeDetector != null &&
-                                now - lastDetectAtMs >= DETECT_INTERVAL_MS
+                                now - lastDetectAtMs >= currentDetectIntervalMs
                             ) {
                                 lastDetectAtMs = now
                                 try {
@@ -886,6 +927,75 @@ class MainActivity : AppCompatActivity() {
     // ============================================================
     //  值守看门狗（M4）
     // ============================================================
+
+    // ============================================================
+    //  温控与自适应帧率（M6）
+    // ============================================================
+
+    /** 每若干秒查一次温度；档位变化时播报并调整识别频率 */
+    private fun tickThermal() {
+        if (!::thermalGuard.isInitialized) return
+        thermalTickCounter++
+        if (thermalTickCounter < THERMAL_CHECK_INTERVAL_S) return
+        thermalTickCounter = 0
+
+        val level = thermalGuard.update()
+        if (level != thermalLevel) {
+            thermalLevel = level
+            onThermalLevelChanged(level)
+        }
+        refreshDetectInterval()
+    }
+
+    /**
+     * 档位变化时的处理。
+     *
+     * ⚠️ 两级降载都必须【说出来】：
+     *    降载和暂停都会导致这段时间识别能力下降甚至完全停止。
+     *    如果默默降载，值班的人会以为一切正常，而实际上车可能已经漏了。
+     *    章程红线：禁止静默降级。
+     */
+    private fun onThermalLevelChanged(level: ThermalGuard.Level) {
+        val temp = thermalGuard.lastTemperatureC
+        Log.w(TAG, "温度保护：$level（${temp}°C）")
+        when (level) {
+            ThermalGuard.Level.NORMAL -> {
+                binding.tvThermalWarning.visibility = View.GONE
+                voiceAnnouncer.say("温度已恢复正常，继续监视")
+            }
+            ThermalGuard.Level.THROTTLED -> {
+                binding.tvThermalWarning.text = "手机温度偏高（${temp}°C），已降低识别频率散热"
+                binding.tvThermalWarning.visibility = View.VISIBLE
+                voiceAnnouncer.say("手机温度偏高，已降低识别频率")
+            }
+            ThermalGuard.Level.PAUSED -> {
+                binding.tvThermalWarning.text =
+                    "⚠ 手机温度过高（${temp}°C），已暂停车辆识别\n请改善散热（移开阳光直射、垫高留出风道）"
+                binding.tvThermalWarning.visibility = View.VISIBLE
+                voiceAnnouncer.say("手机温度过高，已暂停车辆识别，请改善散热")
+            }
+        }
+    }
+
+    /** 把设置里的频率与当前温控档位合成出最终生效的识别间隔 */
+    private fun refreshDetectInterval() {
+        val base = settings.detectIntervalMs
+        currentDetectIntervalMs = thermalGuard.detectIntervalMs(thermalLevel, base)
+    }
+
+    /** 把设置里的各项参数应用到运行时 */
+    private fun applyAllSettings() {
+        YoloDetector.confThreshold = settings.confidenceThreshold
+        alarmController.volumePercent = settings.alarmVolumePercent
+        thermalGuard.throttleC = settings.throttleTempC
+        thermalGuard.pauseC = settings.pauseTempC
+        refreshDetectInterval()
+        Log.i(
+            TAG,
+            "参数已应用：间隔=${currentDetectIntervalMs}ms 阈值=${settings.confidenceThreshold} " +
+                "音量=${settings.alarmVolumePercent}% 温控=${settings.throttleTempC}/${settings.pauseTempC}°C"
+        )
+    }
 
     /**
      * 相机看门狗：画面停止出帧超过阈值就强制重建相机。
@@ -1144,7 +1254,102 @@ class MainActivity : AppCompatActivity() {
             setPadding(0, 0, 0, 4)
         })
 
-        // ---------- ③ 系统权限（M4 后台值守必需） ----------
+        // 设置对话框自身的引用：下面几个按钮点完要先关掉对话框。
+        // 必须声明在使用它的按钮之前 —— Kotlin 的局部变量不能先用后声明。
+        var settingsDialog: AlertDialog? = null
+
+        // ---------- ③ 识别与温控（M6） ----------
+        container.addView(TextView(this).apply {
+            text = "\n识别与温控"
+            textSize = 16f
+            setPadding(0, 20, 0, 2)
+        })
+
+        // 监测区域
+        container.addView(TextView(this).apply {
+            text = "监测区域：${if (settings.hasCustomRoi) "已框选" else "整幅画面（未框选）"}"
+            textSize = 13f
+        })
+        container.addView(Button(this).apply {
+            text = "重新框选监测区域"
+            setOnClickListener {
+                settingsDialog?.dismiss()
+                // 稍等一下再进入框选，避免对话框的消失动画还在跑
+                uiHandler.postDelayed({ binding.roiOverlay.startCalibration() }, 300L)
+            }
+        })
+
+        // 识别灵敏度
+        container.addView(TextView(this).apply {
+            text = "识别灵敏度（越低越容易报警，也越容易误报）"
+            textSize = 13f
+            setPadding(0, 12, 0, 4)
+        })
+        val confOptions = listOf(0.25f, 0.35f, 0.50f)
+        val confLabels = listOf("宽松0.25", "标准0.35★", "严格0.50")
+        val confGroup = RadioGroup(this).apply { orientation = RadioGroup.HORIZONTAL }
+        confOptions.forEachIndexed { i, v ->
+            confGroup.addView(RadioButton(this).apply {
+                id = i
+                text = confLabels[i]
+                textSize = 14f
+                isChecked = kotlin.math.abs(v - settings.confidenceThreshold) < 0.01f
+            })
+        }
+        container.addView(confGroup)
+
+        // 识别频率
+        container.addView(TextView(this).apply {
+            text = "识别频率（越稀越省电、越不发热，也越容易漏车）"
+            textSize = 13f
+            setPadding(0, 12, 0, 4)
+        })
+        val intervalOptions = listOf(300L, 500L, 1000L, 2000L)
+        val intervalLabels = listOf("快300ms", "标准500ms★", "省电1s", "最省2s")
+        val intervalGroup = RadioGroup(this).apply { orientation = RadioGroup.HORIZONTAL }
+        intervalOptions.forEachIndexed { i, v ->
+            intervalGroup.addView(RadioButton(this).apply {
+                id = i
+                text = intervalLabels[i]
+                textSize = 14f
+                isChecked = v == settings.detectIntervalMs
+            })
+        }
+        container.addView(intervalGroup)
+
+        // 报警音量
+        container.addView(TextView(this).apply {
+            text = "报警音量（占闹钟最大音量的比例）"
+            textSize = 13f
+            setPadding(0, 12, 0, 4)
+        })
+        val volumeOptions = listOf(100, 80, 60, 40)
+        val volumeGroup = RadioGroup(this).apply { orientation = RadioGroup.HORIZONTAL }
+        volumeOptions.forEachIndexed { i, v ->
+            volumeGroup.addView(RadioButton(this).apply {
+                id = i
+                text = if (v == 100) "最大★" else "${v}%"
+                textSize = 14f
+                isChecked = v == settings.alarmVolumePercent
+            })
+        }
+        container.addView(volumeGroup)
+        container.addView(TextView(this).apply {
+            text = "⚠ 音量每降一档，叫醒成功率就低一档。夜班建议保持「最大」。"
+            textSize = 12f
+            setTextColor(0xFFFF6D00.toInt())
+        })
+
+        // 温度（只读展示；阈值按章程固定 45/50，不开放改动）
+        container.addView(TextView(this).apply {
+            text = "\n温度保护：降载 ${settings.throttleTempC.toInt()}°C ／ " +
+                "暂停 ${settings.pauseTempC.toInt()}°C（章程固定值）\n" +
+                "当前电池温度：${thermalGuard.describe(thermalLevel)}"
+            textSize = 12f
+            setPadding(0, 8, 0, 0)
+        })
+
+        // ---------- ④ 系统权限（M4 后台值守必需） ----------
         container.addView(TextView(this).apply {
             text = "\n系统权限（M4 后台值守必需）"
             textSize = 16f
@@ -1188,9 +1393,6 @@ class MainActivity : AppCompatActivity() {
             textSize = 12f
             setPadding(0, 8, 0, 0)
         })
-
-        // 设置对话框自身的引用：下面几个按钮点完要先关掉对话框
-        var settingsDialog: AlertDialog? = null
 
         // ---------- ④ 告警记录（M5） ----------
         container.addView(TextView(this).apply {
@@ -1253,7 +1455,20 @@ class MainActivity : AppCompatActivity() {
 
                 // 立刻生效，不用等下次报警
                 applyHoldDuration()
-                Log.i(TAG, "设置已更新：长按时长 ${settings.dismissHoldSeconds} 秒")
+
+                // M6：识别灵敏度 / 频率 / 音量
+                confOptions.getOrNull(confGroup.checkedRadioButtonId)?.let {
+                    settings.confidenceThreshold = it
+                }
+                intervalOptions.getOrNull(intervalGroup.checkedRadioButtonId)?.let {
+                    settings.detectIntervalMs = it
+                }
+                volumeOptions.getOrNull(volumeGroup.checkedRadioButtonId)?.let {
+                    settings.alarmVolumePercent = it
+                }
+                applyAllSettings()
+
+                Log.i(TAG, "设置已更新：长按 ${settings.dismissHoldSeconds} 秒")
             }
             .setNegativeButton("取消", null)
             .create()
@@ -1441,11 +1656,21 @@ class MainActivity : AppCompatActivity() {
             binding.tvAlarmDiag.visibility = View.GONE
         }
 
+        // 暂停时 currentDetectIntervalMs 是 Long.MAX_VALUE，
+        // 直接打出来会变成一串 19 位的天文数字，用户只会一脸问号。显示成"已暂停"。
+        val intervalText =
+            if (currentDetectIntervalMs >= Long.MAX_VALUE / 2) "已暂停"
+            else "${currentDetectIntervalMs}ms"
+
         binding.tvDiag.text = String.format(
             Locale.US,
-            "状态：%s\n分辨率：%s\n帧率：%d fps\n夜视：%s\n识别：%s\n区域：%s | %s\n已运行：%s",
+            "状态：%s\n分辨率：%s\n帧率：%d fps\n夜视：%s\n识别：%s（间隔 %s）\n" +
+                "区域：%s | %s\n温度：%s\n已运行：%s",
             stateText, resText, fps, lowLightSummary, detectText,
-            roiText, gateText, formatDuration(uptimeSec)
+            intervalText,
+            roiText, gateText,
+            thermalGuard.describe(thermalLevel),
+            formatDuration(uptimeSec)
         )
     }
 

@@ -85,6 +85,9 @@ class AlarmController(
     /** 当前正在报警的号码，供升级拨号使用 */
     private var currentPhone: String = ""
 
+    /** 报警音量占闹钟最大音量的百分比（M6），默认 100 */
+    var volumePercent: Int = 100
+
     /** 是否正在报警 */
     var isRinging: Boolean = false
         private set
@@ -162,7 +165,12 @@ class AlarmController(
                 originalAlarmVolume = audioManager.getStreamVolume(AudioManager.STREAM_ALARM)
             }
             val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_ALARM)
-            audioManager.setStreamVolume(AudioManager.STREAM_ALARM, maxVolume, 0)
+            // M6：音量可以调低，但下限 30% —— 再低就起不到"叫醒"的作用了。
+            // 默认 100%。
+            val target = (maxVolume * volumePercent / 100).coerceAtLeast(
+                (maxVolume * 30 / 100)
+            )
+            audioManager.setStreamVolume(AudioManager.STREAM_ALARM, target, 0)
 
             val attributes = AudioAttributes.Builder()
                 // USAGE_ALARM：静音也能响，默认能穿透勿扰。
