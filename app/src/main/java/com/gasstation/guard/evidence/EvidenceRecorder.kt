@@ -94,6 +94,17 @@ class EvidenceRecorder(
     private val ring = ArrayDeque<ByteArray>(RING_FRAMES)
 
     private var sessionFrames: MutableList<ByteArray>? = null
+
+    /**
+     * 告警瞬间的一张【全分辨率】照片。
+     *
+     * 视频帧是缩到 640x360 的（为了编码速度和文件大小），
+     * 但作为取证照片太糊了 —— 车牌、车型这些细节看不清。
+     * 所以额外单独存一张原始分辨率的。
+     */
+    private var sessionPhoto: ByteArray? = null
+    private var needsFullResPhoto = false
+
     private var sessionDir: File? = null
     private var sessionStartedAt = 0L
     private var sessionDetections: List<Detection> = emptyList()
@@ -107,6 +118,9 @@ class EvidenceRecorder(
     private val scalePaint = Paint(Paint.FILTER_BITMAP_FLAG)
     private val dstRect = Rect(0, 0, CLIP_WIDTH, CLIP_HEIGHT)
     private val jpegBuffer = ByteArrayOutputStream(64 * 1024)
+
+    /** 全分辨率照片的压缩缓冲，容量开大一点免得反复扩容 */
+    private val fullJpegBuffer = ByteArrayOutputStream(512 * 1024)
 
     /** 是否正在记录一次告警 */
     val isRecording: Boolean
@@ -138,17 +152,30 @@ class EvidenceRecorder(
         }
 
         var shouldFinalize = false
+        var takeFullResPhoto = false
         synchronized(lock) {
             ring.addLast(jpeg)
             while (ring.size > RING_FRAMES) ring.removeFirst()
 
             sessionFrames?.add(jpeg)
 
+            if (needsFullResPhoto) {
+                needsFullResPhoto = false
+                takeFullResPhoto = true
+            }
+
             val elapsed = System.currentTimeMillis() - sessionStartedAt
             // 录满上限就强制收尾，避免无人解除报警时无限堆积
             if (elapsed >= MAX_SESSION_MS) finishRequested = true
             shouldFinalize = finishRequested && elapsed >= POST_ALARM_MS
         }
+
+        // 全分辨率压缩要几十毫秒，放到锁外面做，别占着锁
+        if (takeFullResPhoto) {
+            val full = compressFullRes(source)
+            synchronized(lock) { sessionPhoto = full }
+        }
+
         if (shouldFinalize) finalizeSession()
     }
 
@@ -166,6 +193,9 @@ class EvidenceRecorder(
             sessionStartedAt = System.currentTimeMillis()
             sessionDetections = detections
             finishRequested = false
+            // 等下一帧来时压一张全分辨率照片 —— 那一帧最接近"车刚进来"的瞬间
+            needsFullResPhoto = true
+            sessionPhoto = null
 
             val frames = ArrayList<ByteArray>(RING_FRAMES + 64)
             frames.addAll(ring)                        // ← 报警【前】的画面
@@ -211,6 +241,7 @@ class EvidenceRecorder(
         val dir: File
         val detections: List<Detection>
         val startedAt: Long
+        val photo: ByteArray?
         synchronized(lock) {
             val f = sessionFrames ?: return
             val d = sessionDir ?: return
@@ -218,8 +249,11 @@ class EvidenceRecorder(
             dir = d
             detections = sessionDetections
             startedAt = sessionStartedAt
+            // 优先用全分辨率那张；万一没拍到就退回最后一帧（至少有个东西）
+            photo = sessionPhoto ?: frames.lastOrNull()
             sessionFrames = null
             sessionDir = null
+            sessionPhoto = null
             finishRequested = false
         }
 
@@ -228,8 +262,8 @@ class EvidenceRecorder(
             try {
                 Log.i(TAG, "编码告警录像：${frames.size} 帧 → ${dir.name}/clip.mp4")
 
-                // 照片：模型最后看到的那一帧（也是分辨率最高的一张）
-                writeBytes(File(dir, "photo.jpg"), frames.lastOrNull())
+                // 照片：报警瞬间的全分辨率快照（取证要看得清车型/车牌）
+                writeBytes(File(dir, "photo.jpg"), photo)
 
                 // 视频
                 clip = encodeClip(frames, File(dir, "clip.mp4"))
@@ -308,6 +342,16 @@ class EvidenceRecorder(
         BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)
     } catch (t: Throwable) {
         Log.w(TAG, "解码证据帧失败", t)
+        null
+    }
+
+    /** 全分辨率照片：不做缩放，直接压。只在报警后压一次，开销可接受。 */
+    private fun compressFullRes(source: Bitmap): ByteArray? = try {
+        fullJpegBuffer.reset()
+        source.compress(Bitmap.CompressFormat.JPEG, 85, fullJpegBuffer)
+        fullJpegBuffer.toByteArray()
+    } catch (t: Throwable) {
+        Log.w(TAG, "压缩全分辨率照片失败", t)
         null
     }
 
