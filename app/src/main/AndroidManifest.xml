@@ -5,9 +5,20 @@
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- 相机权限：M1 的预览、M2 的识别都依赖它。
-         这是本应用唯一需要的敏感权限。 -->
+    <!-- 相机权限：M1 的预览、M2 的识别都依赖它。 -->
     <uses-permission android:name="android.permission.CAMERA" />
+
+    <!-- 震动权限（M3）：报警时循环震动。必须和声音、语音同时上，
+         任何一条通道失效另外两条还在。 -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+
+    <!-- 拨打电话权限（M3）：报警 30 秒无人解除时自动拨打紧急号码。
+         这是最后一道防线 —— 如果人根本不在岗，光有声音没用。 -->
+    <uses-permission android:name="android.permission.CALL_PHONE" />
+
+    <!-- 修改音频设置（M3）：报警时把闹钟音量强制拉到最大，结束后还原。
+         不做这一步，"静音模式下报警没用"这个问题就解决不了。 -->
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
 
     <!-- 声明「本应用必须要有摄像头」。荣耀 200 有后置摄像头，满足。
          required="true" 意味着没有摄像头的设备装不上，

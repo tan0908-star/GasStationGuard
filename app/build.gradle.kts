@@ -52,6 +52,9 @@ android {
     // 控件 id 写错时编译期就报错，而不是运行时崩溃。
     buildFeatures {
         viewBinding = true
+        // 生成 BuildConfig，供 M3 的「仅 debug 生效」报警测试入口使用。
+        // AGP 8 起默认不再生成，需要显式打开。
+        buildConfig = true
     }
 
     // M2 改动：assets 里的 .tflite 必须【不压缩】。

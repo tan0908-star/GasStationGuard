@@ -1,8 +1,11 @@
 package com.gasstation.guard
 
 import android.Manifest
+import android.animation.ValueAnimator
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CaptureRequest
@@ -15,7 +18,10 @@ import android.util.Range
 import android.util.Size
 import android.view.View
 import android.view.WindowManager
+import android.widget.EditText
+import android.widget.FrameLayout
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.camera2.interop.Camera2CameraInfo
 import androidx.camera.camera2.interop.Camera2Interop
@@ -33,8 +39,13 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.LiveData
+import com.gasstation.guard.alarm.AlarmController
 import com.gasstation.guard.databinding.ActivityMainBinding
+import com.gasstation.guard.detect.DetectionGate
+import com.gasstation.guard.detect.RoiRect
 import com.gasstation.guard.detect.YoloDetector
+import com.gasstation.guard.detect.isInsideRoi
+import com.gasstation.guard.settings.SettingsStore
 import java.util.Locale
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -86,6 +97,9 @@ class MainActivity : AppCompatActivity() {
          * 现在固定 500ms（2 fps），M6 会改成按电池温度自适应。
          */
         private const val DETECT_INTERVAL_MS = 500L
+
+        /** 调试触发报警时用的拨号延时（秒）。故意很长，防止测试时误拨真实号码。 */
+        private const val DEBUG_DIAL_DELAY_SECONDS = 300
     }
 
     /**
@@ -217,6 +231,50 @@ class MainActivity : AppCompatActivity() {
     private var lastInferenceMs = 0L
 
     // ============================================================
+    //  报警（M3）
+    // ============================================================
+
+    /** 应用参数：紧急号码、监测区域、拨号延时… */
+    private lateinit var settings: SettingsStore
+
+    /** 多帧确认闸门：决定"连续看到几帧才算真的有车" */
+    private val gate = DetectionGate()
+
+    /** 报警控制器：声音 + 震动 + 中文语音 + 升级拨号 */
+    private lateinit var alarmController: AlarmController
+
+    /** 当前生效的监测区域。分析线程会读它，所以用 @Volatile。 */
+    @Volatile
+    private var roi: RoiRect = RoiRect.FULL
+
+    /** 红色闪烁动画 */
+    private var flashAnimator: ValueAnimator? = null
+
+    /** 报警界面倒计时刷新任务 */
+    private var countdownRunnable: Runnable? = null
+
+    /**
+     * 本次报警是否由调试入口触发。
+     *
+     * 如果是，自动拨号的延时会从 30 秒拉长到 5 分钟 ——
+     * 防止在自动化测试中因为"忘了及时解除报警"而真的把电话拨出去。
+     * （2026-10 实际发生过：测试时用户已经填了真实号码，
+     *   连续跑了几次报警却没在 30 秒内停掉，无法确认是否误拨。）
+     */
+    private var debugTriggeredAlarm = false
+
+    /** 是否已授予拨号权限。没有它，最后一道防线就是空的 —— 必须显式提示，不静默。 */
+    private var canAutoDial = false
+
+    /** 最近一帧是否有目标落在监测区域内 */
+    @Volatile
+    private var lastRoiHit = false
+
+    /** 多帧确认闸门的状态描述，显示在诊断条上 */
+    @Volatile
+    private var lastGateSummary = "-"
+
+    // ============================================================
     //  诊断仪表（M1 的验证工具，不是业务功能）
     // ============================================================
 
@@ -262,6 +320,15 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+    /** 拨号权限的申请结果。被拒时会在屏幕上明确提示"自动拨号不可用"。 */
+    private val callPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            canAutoDial = granted
+            if (!granted) {
+                Log.w(TAG, "未授予拨号权限：30 秒后自动拨号这道防线不可用")
+            }
+        }
+
     // ============================================================
     //  生命周期
     // ============================================================
@@ -297,6 +364,65 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        // ---------- M3：报警相关初始化 ----------
+        settings = SettingsStore(this)
+
+        // 读出已保存的监测区域（没设过就是整幅画面）
+        roi = RoiRect(
+            settings.roiLeft, settings.roiTop, settings.roiRight, settings.roiBottom
+        )
+        binding.roiOverlay.updateRoi(roi)
+        binding.roiOverlay.onRoiChanged = { left, top, right, bottom ->
+            settings.saveRoi(left, top, right, bottom)
+            roi = RoiRect(left, top, right, bottom)
+            binding.roiOverlay.updateRoi(roi)
+            Log.i(TAG, "监测区域已更新：L=%.3f T=%.3f R=%.3f B=%.3f"
+                .format(left, top, right, bottom))
+        }
+        binding.roiOverlay.onCalibrationChanged = { calibrating ->
+            // 框选时把诊断条藏起来，免得挡住视线
+            binding.tvDiag.visibility = if (calibrating) View.GONE else View.VISIBLE
+        }
+
+        alarmController = AlarmController(
+            context = this,
+            onEscalateDial = { number -> dialEmergencyNumber(number) }
+        )
+
+        // 「已到岗」长按 2 秒解除报警
+        binding.btnImHere.holdMillis = 2_000L
+        binding.btnImHere.onConfirmed = { dismissAlarm() }
+
+        // 长按左上角诊断条 = 打开紧急号码设置
+        // （M6 会做成正式的隐藏设置页，这里是 M3 的最小可用入口）
+        binding.tvDiag.setOnLongClickListener {
+            showEmergencyPhoneDialog()
+            true
+        }
+
+        // 拨号权限
+        canAutoDial = ContextCompat.checkSelfPermission(
+            this, Manifest.permission.CALL_PHONE
+        ) == PackageManager.PERMISSION_GRANTED
+        if (!canAutoDial) {
+            callPermissionLauncher.launch(Manifest.permission.CALL_PHONE)
+        }
+
+        // ---------- 仅 debug 生效：报警通道自测入口 ----------
+        // 没有车的时候也需要验证"报警到底响不响、闪不闪、震不震、说不说话"，
+        // 否则要等到真有机动车经过才能发现问题，太被动。
+        //
+        // 用 BuildConfig.DEBUG 严格守住：正式版（release）里这段代码根本不生效，
+        // 外部应用无法通过 Intent 触发假报警。
+        // 用法：adb shell am start -n com.gasstation.guard/.MainActivity --ez debug_alarm true
+        if (BuildConfig.DEBUG && intent?.getBooleanExtra("debug_alarm", false) == true) {
+            uiHandler.postDelayed({
+                Log.w(TAG, "【仅调试】通过 Intent 触发一次报警自测（拨号延时已拉长到 5 分钟）")
+                debugTriggeredAlarm = true
+                startAlarm()
+            }, 2_000L)
+        }
+
         // 启动每秒刷新的诊断条
         uiHandler.post(ticker)
 
@@ -327,6 +453,12 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        // 报警必须在窗口销毁前停掉 —— 否则声音会一直响到进程被杀
+        if (::alarmController.isInitialized) {
+            alarmController.stop()
+        }
+        stopFlash()
+        stopCountdown()
         uiHandler.removeCallbacksAndMessages(null)
         cameraStateLive?.removeObservers(this)
         cameraStateLive = null
@@ -442,10 +574,30 @@ class MainActivity : AppCompatActivity() {
                                     lastDetectionCount = result.detections.size
                                     lastInferenceMs = result.inferenceMs
 
+                                    // ---------- M3：ROI 过滤 + 多帧确认 ----------
+                                    // ① 只有【落在监测区域内】的目标才算数。
+                                    //    这一步挡掉马路上的过路车、对面楼里的灯光、树影晃动。
+                                    val currentRoi = roi
+                                    val hit = result.detections.any { it.isInsideRoi(currentRoi) }
+                                    lastRoiHit = hit
+
+                                    // ② 多帧确认：单帧检出不算数，要窗口内多次命中。
+                                    //    已经在报警时不再重复触发（避免同一个目标反复触发）。
+                                    val confirmed = if (alarmController.isRinging) {
+                                        false
+                                    } else {
+                                        gate.offer(hit)
+                                    }
+                                    lastGateSummary = gate.describe()
+
                                     // 画框必须回主线程：View 不是线程安全的
                                     uiHandler.post {
                                         if (!isFinishing && !isDestroyed) {
                                             binding.detectionOverlay.update(result)
+                                            binding.roiOverlay.updateImageSize(
+                                                result.imageWidth, result.imageHeight
+                                            )
+                                            if (confirmed) startAlarm()
                                         }
                                     }
                                 } catch (t: Throwable) {
@@ -603,6 +755,158 @@ class MainActivity : AppCompatActivity() {
             .build()
 
     // ============================================================
+    //  报警（M3）
+    // ============================================================
+
+    /** 报警界面上要额外显示的警告（号码没设 / 没有拨号权限），空串表示无 */
+    private var alarmWarning = ""
+
+    /**
+     * 启动强制报警。
+     *
+     * 触发这条路径的前提是：监测区域内连续多帧确认有车。
+     * 一旦进入这里，声音、震动、语音三条通道会同时上，
+     * 而且只有"长按 2 秒 已到岗"才能停下来。
+     */
+    private fun startAlarm() {
+        if (alarmController.isRinging) return
+        Log.i(TAG, "多帧确认通过，启动强制报警")
+
+        val phone = settings.emergencyPhone
+        alarmWarning = when {
+            phone.isBlank() ->
+                "紧急号码未设置，30 秒后无法自动拨号（长按左上角信息条填写）"
+            !canAutoDial ->
+                "未授予拨号权限，30 秒后无法自动拨号"
+            else -> ""
+        }
+
+        binding.alarmOverlay.visibility = View.VISIBLE
+        // 报警时藏起左上角诊断条：实测它会和报警文字叠在一起，看着像画面坏了，
+        // 而人在半梦半醒时最不需要的就是"这个屏幕是不是出故障了"的困惑。
+        binding.tvDiag.visibility = View.GONE
+        startFlash()
+
+        // 调试触发时把拨号延时拉长，避免自动化测试误拨真实号码
+        val dialDelay = if (debugTriggeredAlarm) DEBUG_DIAL_DELAY_SECONDS
+        else settings.autoDialDelaySeconds
+
+        alarmController.start(phone, dialDelay)
+        startCountdown(dialDelay)
+    }
+
+    /** 值班人员确认已到岗，解除报警 */
+    private fun dismissAlarm() {
+        if (!alarmController.isRinging) return
+        Log.i(TAG, "值班人员确认已到岗，解除报警")
+
+        stopCountdown()
+        alarmController.stop()
+        stopFlash()
+        binding.tvAlarmSubtitle.text = ""
+        binding.alarmOverlay.visibility = View.GONE
+        binding.tvAlarmDiag.visibility = View.GONE
+        binding.tvDiag.visibility = View.VISIBLE
+
+        // 通知闸门：等画面清空之后才重新武装，避免同一个目标反复触发
+        gate.onAlarmDismissed()
+    }
+
+    /** 红色闪烁：亮 0.4 秒 ↔ 暗 0.4 秒，无限循环 */
+    private fun startFlash() {
+        flashAnimator?.cancel()
+        flashAnimator = ValueAnimator.ofFloat(0.92f, 0.22f).apply {
+            duration = 400L
+            repeatMode = ValueAnimator.REVERSE
+            repeatCount = ValueAnimator.INFINITE
+            addUpdateListener { binding.alarmFlash.alpha = it.animatedValue as Float }
+            start()
+        }
+    }
+
+    private fun stopFlash() {
+        flashAnimator?.cancel()
+        flashAnimator = null
+    }
+
+    /** 报警界面上的倒计时：还有多久自动拨号 */
+    private fun startCountdown(totalSeconds: Int) {
+        val startAt = SystemClock.elapsedRealtime()
+
+        val runnable = object : Runnable {
+            override fun run() {
+                if (!alarmController.isRinging) return
+                val elapsed = (SystemClock.elapsedRealtime() - startAt) / 1000
+                val remain = (totalSeconds - elapsed).coerceAtLeast(0)
+                val line = if (remain > 0) "${remain} 秒后自动拨号" else "正在自动拨号…"
+                binding.tvAlarmSubtitle.text =
+                    if (alarmWarning.isEmpty()) line else "$alarmWarning\n$line"
+                uiHandler.postDelayed(this, 1_000L)
+            }
+        }
+        countdownRunnable = runnable
+        uiHandler.post(runnable)
+    }
+
+    private fun stopCountdown() {
+        countdownRunnable?.let { uiHandler.removeCallbacks(it) }
+        countdownRunnable = null
+    }
+
+    /**
+     * 拨打紧急号码 —— 这是最后一道防线。
+     *
+     * 有没有拨号权限、号码有没有设置，都必须【显式失败】，
+     * 绝不允许"以为拨了其实没拨"。章程红线。
+     */
+    private fun dialEmergencyNumber(number: String) {
+        if (!canAutoDial) {
+            showError(
+                "自动拨号失败：未授予「电话」权限。\n\n" +
+                    "请到：设置 → 应用 → 应用管理 → 加油站车辆报警 → 权限 → 电话，\n" +
+                    "改为「允许」。"
+            )
+            return
+        }
+        try {
+            val intent = Intent(Intent.ACTION_CALL, Uri.parse("tel:" + Uri.encode(number)))
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(intent)
+        } catch (t: Throwable) {
+            Log.e(TAG, "自动拨号失败", t)
+            showError("自动拨号失败：${t.message}")
+        }
+    }
+
+    /**
+     * 紧急号码设置对话框。
+     *
+     * 入口：长按左上角信息条。
+     * M3 阶段的最小可用入口，M6 会做成正式的隐藏设置页。
+     */
+    private fun showEmergencyPhoneDialog() {
+        val input = EditText(this).apply {
+            hint = "例如 13800138000"
+            setText(settings.emergencyPhone)
+            inputType = android.text.InputType.TYPE_CLASS_PHONE
+            setPadding(48, 32, 48, 32)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("紧急联系电话")
+            .setMessage(
+                "报警 30 秒无人解除时，自动拨打这个号码。\n\n" +
+                    "留空 = 不拨号，但报警界面上会明确提示「号码未设置」。"
+            )
+            .setView(input)
+            .setPositiveButton("保存") { _, _ ->
+                settings.emergencyPhone = input.text.toString()
+                Log.i(TAG, "紧急号码已更新")
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    // ============================================================
     //  界面
     // ============================================================
 
@@ -646,10 +950,23 @@ class MainActivity : AppCompatActivity() {
             "无目标 (${lastInferenceMs}ms)"
         }
 
+        // 监测区域与多帧确认闸门的状态
+        val roiText = if (settings.hasCustomRoi) "已框选" else "整幅画面(未框选)"
+        val gateText = if (lastRoiHit) "区域内·$lastGateSummary" else "区域内无车"
+
+        // 报警中：在报警界面上实时显示三条通道的状态
+        if (alarmController.isRinging) {
+            binding.tvAlarmDiag.text = alarmController.diagnosticSummary()
+            binding.tvAlarmDiag.visibility = View.VISIBLE
+        } else {
+            binding.tvAlarmDiag.visibility = View.GONE
+        }
+
         binding.tvDiag.text = String.format(
             Locale.US,
-            "状态：%s\n分辨率：%s\n帧率：%d fps\n夜视：%s\n识别：%s\n已运行：%s",
-            stateText, resText, fps, lowLightSummary, detectText, formatDuration(uptimeSec)
+            "状态：%s\n分辨率：%s\n帧率：%d fps\n夜视：%s\n识别：%s\n区域：%s | %s\n已运行：%s",
+            stateText, resText, fps, lowLightSummary, detectText,
+            roiText, gateText, formatDuration(uptimeSec)
         )
     }
 

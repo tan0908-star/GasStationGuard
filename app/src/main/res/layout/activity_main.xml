@@ -46,6 +46,19 @@
         android:layout_height="match_parent" />
 
     <!--
+        监测区域（ROI）浮层（M3 新增）。
+        - 平时：把 ROI 之外的画面压暗，让"只看这块区域"一目了然
+        - 长按 2 秒：进入框选模式，拖动矩形，松手保存
+
+        它必须放在检测框浮层【之上】：
+        检测框是"识别到了什么"，ROI 是"我们只关心哪里"，后者优先级更高。
+    -->
+    <com.gasstation.guard.ui.RoiOverlayView
+        android:id="@+id/roiOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <!--
         左上角诊断条（M1 的验证仪表，不是业务功能）。
         显示：相机状态 / 实际分辨率 / 真实帧率 / 已运行时长。
         没有它，你无法判断「画面是真在流动，还是卡死了」。
@@ -81,5 +94,85 @@
         android:textColor="#FFFF5252"
         android:textSize="20sp"
         android:visibility="gone" />
+
+    <!--
+        ============================================================
+         强制报警界面（M3）—— 放在最上层，盖住一切
+        ============================================================
+        这一层出现时，屏幕上就只有它，且必须靠"长按 2 秒"才能关掉。
+        任何"点一下就关掉"的设计都是不能接受的 —— 那是漏报的直接来源。
+    -->
+    <FrameLayout
+        android:id="@+id/alarmOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:visibility="gone">
+
+        <!-- 红色闪烁层。alpha 由代码交替驱动 -->
+        <View
+            android:id="@+id/alarmFlash"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="#FFD32F2F" />
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:gravity="center_horizontal"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/tvAlarmTitle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:shadowColor="#FF000000"
+                android:shadowDx="3"
+                android:shadowDy="3"
+                android:shadowRadius="8"
+                android:text="有车辆进入"
+                android:textColor="#FFFFFFFF"
+                android:textSize="34sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/tvAlarmSubtitle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:shadowColor="#FF000000"
+                android:shadowDx="2"
+                android:shadowDy="2"
+                android:shadowRadius="6"
+                android:text=""
+                android:textColor="#FFFFFFFF"
+                android:textSize="17sp" />
+
+            <com.gasstation.guard.ui.LongPressConfirmButton
+                android:id="@+id/btnImHere"
+                android:layout_width="440dp"
+                android:layout_height="104dp"
+                android:layout_marginTop="30dp" />
+        </LinearLayout>
+
+        <!--
+            三条报警通道的实时状态（铃声 / 震动 / 语音）。
+            刻意画在屏幕上而不是只写日志：这台手机的 ROM 会把应用日志冲掉，
+            排查"语音到底响没响"时 logcat 完全不可靠，截图才是证据。
+            正式交付前可以隐藏，但在夜班真机验收阶段它是很有用的仪表。
+        -->
+        <TextView
+            android:id="@+id/tvAlarmDiag"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom|center_horizontal"
+            android:layout_marginBottom="16dp"
+            android:background="#99000000"
+            android:fontFamily="monospace"
+            android:padding="8dp"
+            android:textColor="#FFFFFFFF"
+            android:textSize="13sp"
+            android:visibility="gone" />
+    </FrameLayout>
 
 </FrameLayout>

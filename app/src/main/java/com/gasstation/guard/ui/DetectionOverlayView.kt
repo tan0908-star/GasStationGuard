@@ -104,27 +104,21 @@ class DetectionOverlayView @JvmOverloads constructor(
         if (res.imageWidth <= 0 || res.imageHeight <= 0) return
 
         // ---------- 第二级坐标映射：归一化坐标 → 本 View 像素坐标 ----------
-        val scale = min(
-            width.toFloat() / res.imageWidth,
-            height.toFloat() / res.imageHeight
-        )
-        val displayWidth = res.imageWidth * scale
-        val displayHeight = res.imageHeight * scale
-        val offsetX = (width - displayWidth) / 2f
-        val offsetY = (height - displayHeight) / 2f
+        // 统一走 computeVideoRect，保证和 ROI 判定、ROI 框选手势是同一套几何。
+        // M2 已用真机截图验证过这套映射，误差 1 像素。
+        val video = computeVideoRect(width, height, res.imageWidth, res.imageHeight)
+        if (video.width() <= 0f || video.height() <= 0f) return
 
         // 调试框：如果这条白框和预览画面的四边严丝合缝，说明坐标映射是对的
         if (showDebugFrame) {
-            canvas.drawRect(
-                offsetX, offsetY, offsetX + displayWidth, offsetY + displayHeight, debugPaint
-            )
+            canvas.drawRect(video, debugPaint)
         }
 
         for (d in res.detections) {
-            val left = offsetX + d.left * displayWidth
-            val top = offsetY + d.top * displayHeight
-            val right = offsetX + d.right * displayWidth
-            val bottom = offsetY + d.bottom * displayHeight
+            val left = video.left + d.left * video.width()
+            val top = video.top + d.top * video.height()
+            val right = video.left + d.right * video.width()
+            val bottom = video.top + d.bottom * video.height()
 
             val color = colorFor(d.classId)
             boxPaint.color = color
