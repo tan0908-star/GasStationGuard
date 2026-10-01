@@ -6,6 +6,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
+import android.provider.Settings
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CaptureRequest
@@ -18,12 +20,15 @@ import android.util.Range
 import android.util.Size
 import android.view.View
 import android.view.WindowManager
+import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.RadioButton
 import android.widget.RadioGroup
+import android.widget.ScrollView
 import android.widget.TextView
+import androidx.activity.addCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
@@ -49,6 +54,7 @@ import com.gasstation.guard.detect.DetectionGate
 import com.gasstation.guard.detect.RoiRect
 import com.gasstation.guard.detect.YoloDetector
 import com.gasstation.guard.detect.isInsideRoi
+import com.gasstation.guard.service.MonitorService
 import com.gasstation.guard.settings.SettingsStore
 import java.util.Locale
 import java.util.concurrent.ExecutorService
@@ -104,6 +110,19 @@ class MainActivity : AppCompatActivity() {
 
         /** 调试触发报警时用的拨号延时（秒）。故意很长，防止测试时误拨真实号码。 */
         private const val DEBUG_DIAL_DELAY_SECONDS = 300
+
+        // ---------- M4 看门狗 ----------
+
+        /**
+         * 画面连续多少秒没有出帧，就判定相机卡死并重建。
+         *
+         * 设 10 秒是权衡：太短会把"短暂的 AE/AF 调整"误判成故障而频繁重启相机；
+         * 太长则卡死之后会有很长一段无人值守的时间。
+         */
+        private const val FRAME_WATCHDOG_SECONDS = 10
+
+        /** 给值守服务发心跳的间隔。服务那边 45 秒收不到心跳才会认为界面挂了。 */
+        private const val SERVICE_HEARTBEAT_INTERVAL_MS = 10_000L
     }
 
     /**
@@ -279,6 +298,20 @@ class MainActivity : AppCompatActivity() {
     private var lastGateSummary = "-"
 
     // ============================================================
+    //  值守看门狗（M4）
+    // ============================================================
+
+    /** 上一次刷新时算出的帧率，供相机看门狗判断"画面是不是停了" */
+    @Volatile
+    private var lastFps = 0
+
+    /** 连续多少秒没有出帧 */
+    private var zeroFpsStreak = 0
+
+    /** 上一次给值守服务发心跳的时刻 */
+    private var lastHeartbeatAt = 0L
+
+    // ============================================================
     //  诊断仪表（M1 的验证工具，不是业务功能）
     // ============================================================
 
@@ -295,10 +328,12 @@ class MainActivity : AppCompatActivity() {
 
     private val uiHandler = Handler(Looper.getMainLooper())
 
-    /** 每秒刷新一次左上角诊断条 */
+    /** 每秒刷新一次诊断条、跑一次相机看门狗、给值守服务发心跳 */
     private val ticker = object : Runnable {
         override fun run() {
             updateDiag()
+            checkCameraWatchdog()
+            reportHeartbeatToService()
             uiHandler.postDelayed(this, 1_000L)
         }
     }
@@ -321,6 +356,14 @@ class MainActivity : AppCompatActivity() {
                         "请到：设置 → 应用 → 应用管理 → 加油站车辆报警 → 权限 → 相机，\n" +
                         "改为「允许」，然后重新打开本应用。"
                 )
+            }
+        }
+
+    /** 通知权限（M4）。被拒时前台服务通知不显示，部分 ROM 会因此杀掉服务。 */
+    private val notificationPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            if (!granted) {
+                Log.w(TAG, "未授予通知权限：前台服务通知不显示，部分 ROM 会因此杀掉服务")
             }
         }
 
@@ -410,6 +453,28 @@ class MainActivity : AppCompatActivity() {
         ) == PackageManager.PERMISSION_GRANTED
         if (!canAutoDial) {
             callPermissionLauncher.launch(Manifest.permission.CALL_PHONE)
+        }
+
+        // ---------- M4：启动值守前台服务 ----------
+        // 它让进程保持前台优先级（防低内存杀手），并在界面挂掉时把它拉回来。
+        try {
+            MonitorService.start(this)
+        } catch (t: Throwable) {
+            Log.e(TAG, "启动值守服务失败", t)
+        }
+
+        // 通知权限：没有它，前台服务的常驻通知不显示，
+        // 部分 ROM（包括 MagicOS）会因此直接杀掉服务。
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+
+        // 禁止用返回键退出。值守工具被误退出一次 = 整晚没有值守。
+        onBackPressedDispatcher.addCallback(this) {
+            Log.i(TAG, "已忽略返回键（值守中不允许用返回键退出）")
         }
 
         // ---------- 仅 debug 生效：报警通道自测入口 ----------
@@ -762,6 +827,61 @@ class MainActivity : AppCompatActivity() {
     //  报警（M3）
     // ============================================================
 
+    // ============================================================
+    //  值守看门狗（M4）
+    // ============================================================
+
+    /**
+     * 相机看门狗：画面停止出帧超过阈值就强制重建相机。
+     *
+     * 为什么必须有：M1 已经处理了"相机报错/被抢占"，但有一种情况它抓不到 ——
+     * **相机对象还活着、状态也是 OPEN，但就是不出帧了**（HAL 卡死、
+     * 驱动异常、长时间运行后的资源泄漏）。
+     *
+     * 这种故障在界面上表现为"画面冻住"，诊断条的帧率会掉到 0，
+     * 但没有任何异常抛出。如果没有这个看门狗，它会一直冻到天亮 ——
+     * **整晚零值守，而且没有任何报错**，正是章程明令禁止的静默失效。
+     *
+     * 判据用帧率而不是相机状态：帧率是"实际有没有画面"的唯一可信信号。
+     */
+    private fun checkCameraWatchdog() {
+        if (!isForeground || camera == null) {
+            zeroFpsStreak = 0
+            return
+        }
+
+        // 报警时不判定：报警界面盖住了预览，而且此时重建相机会打断报警
+        if (alarmController.isRinging) {
+            zeroFpsStreak = 0
+            return
+        }
+
+        if (lastFps <= 0) {
+            zeroFpsStreak++
+            if (zeroFpsStreak >= FRAME_WATCHDOG_SECONDS) {
+                Log.w(TAG, "相机看门狗：连续 ${zeroFpsStreak} 秒没有画面，强制重建相机")
+                showError("画面已停止流动，正在自动恢复…")
+                zeroFpsStreak = 0
+                camera = null
+                scheduleRetry(0L)
+            }
+        } else {
+            zeroFpsStreak = 0
+        }
+    }
+
+    /** 定期告诉值守服务"我还活着"，让它的看门狗知道不需要拉起界面 */
+    private fun reportHeartbeatToService() {
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastHeartbeatAt < SERVICE_HEARTBEAT_INTERVAL_MS) return
+        lastHeartbeatAt = now
+        MonitorService.heartbeat(this)
+    }
+
+    // ============================================================
+    //  报警（M3）
+    // ============================================================
+
     /** 报警界面上要额外显示的警告（号码没设 / 没有拨号权限），空串表示无 */
     private var alarmWarning = ""
 
@@ -961,9 +1081,57 @@ class MainActivity : AppCompatActivity() {
             setPadding(0, 0, 0, 4)
         })
 
+        // ---------- ③ 系统权限（M4 后台值守必需） ----------
+        container.addView(TextView(this).apply {
+            text = "\n系统权限（M4 后台值守必需）"
+            textSize = 16f
+            setPadding(0, 20, 0, 2)
+        })
+        container.addView(TextView(this).apply {
+            text = "「显示在其他应用上层」是 Android 上【后台启动界面】的唯一可靠豁免。" +
+                "没有它，手机重启后看门狗拉不起值守界面，等于没有自动恢复。"
+            textSize = 12f
+            setPadding(0, 0, 0, 8)
+        })
+        container.addView(Button(this).apply {
+            text = "① 授予「显示在其他应用上层」"
+            setOnClickListener {
+                openSystemSettings(
+                    Intent(
+                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:$packageName")
+                    ),
+                    "打开失败，请手动到：设置 → 应用 → 应用管理 → 加油站车辆报警 → 特殊访问权限 → 显示在其他应用上层"
+                )
+            }
+        })
+        container.addView(Button(this).apply {
+            text = "② 忽略电池优化"
+            setOnClickListener {
+                openSystemSettings(
+                    Intent(
+                        Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                        Uri.parse("package:$packageName")
+                    ),
+                    "打开失败，请手动到：设置 → 电池 → 更多电池设置 → 应用耗电管理"
+                )
+            }
+        })
+        container.addView(TextView(this).apply {
+            text = "③ 自启动管理：设置 → 应用 → 应用启动管理 → 关掉「自动管理」，" +
+                "把三个开关全部打开\n" +
+                "④ 后台加锁：在最近任务里下拉本应用的卡片，点锁图标\n" +
+                "（③④ 荣耀没有标准入口，只能手动点，详见 docs/M4-操作手册.md）"
+            textSize = 12f
+            setPadding(0, 8, 0, 0)
+        })
+
+        // 内容变多了，包一层 ScrollView，避免横屏下又被挤出屏幕外
+        val scroll = ScrollView(this).apply { addView(container) }
+
         AlertDialog.Builder(this)
             .setTitle("设置")
-            .setView(container)
+            .setView(scroll)
             .setPositiveButton("保存") { _, _ ->
                 settings.emergencyPhone = phoneInput.text.toString()
 
@@ -977,6 +1145,22 @@ class MainActivity : AppCompatActivity() {
             }
             .setNegativeButton("取消", null)
             .show()
+    }
+
+    /**
+     * 打开系统设置页。
+     *
+     * 失败【必须明确报出来】：打不开设置页意味着用户没法完成 M4 必需的授权，
+     * 那值守就是不可靠的 —— 不能让人以为"点过了就好了"。
+     */
+    private fun openSystemSettings(intent: Intent, failureHint: String) {
+        try {
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(intent)
+        } catch (t: Throwable) {
+            Log.e(TAG, "打开系统设置失败", t)
+            showError(failureHint)
+        }
     }
 
     /** 把设置里的长按时长应用到「已到岗」按钮上 */
@@ -1004,6 +1188,7 @@ class MainActivity : AppCompatActivity() {
         val total = frameCounter.get()
         val fps = total - lastFrameCount
         lastFrameCount = total
+        lastFps = fps
 
         val stateText = when (camera?.cameraInfo?.cameraState?.value?.type) {
             CameraState.Type.OPEN -> "运行中"

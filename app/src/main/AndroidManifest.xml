@@ -20,6 +20,30 @@
          不做这一步，"静音模式下报警没用"这个问题就解决不了。 -->
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
 
+    <!-- ================= M4：后台常驻相关 ================= -->
+
+    <!-- 前台服务（M4）：让进程保持前台优先级，避免被系统低内存杀手干掉。
+         这是"8 小时不被杀"的第一道防线。 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+
+    <!-- Android 14 起，前台服务必须声明【类型】的对应权限。
+         我们用 specialUse 而不是 camera：
+         因为 Android 15 起禁止从 BOOT_COMPLETED 启动 camera 类型的前台服务，
+         specialUse 不在限制名单里，开机才能正常拉起。 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+
+    <!-- 通知权限（M4）：Android 13 起是运行时权限。
+         没有它，前台服务的常驻通知不显示，部分 ROM 会因此直接杀掉服务。 -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- 接收开机广播（M4）：开机自启的入口 -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!-- 显示在其他应用上层（M4）：这是 Android 上【后台启动界面】的唯一可靠豁免。
+         没有它，看门狗就拉不起值守界面，重启后无法自动恢复值守。
+         需要在系统设置里手动授予，代码无法代劳。 -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
     <!-- 声明「本应用必须要有摄像头」。荣耀 200 有后置摄像头，满足。
          required="true" 意味着没有摄像头的设备装不上，
          这符合预期——没有相机的设备装它没有意义。 -->
@@ -67,6 +91,48 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!--
+            值守前台服务（M4）。
+
+            foregroundServiceType="specialUse" 是刻意的选择：
+            Android 15 起禁止从 BOOT_COMPLETED 启动 camera 类型的前台服务，
+            而 specialUse 不在限制名单里，开机自启才能走通。
+            相机的合法性问题由"界面可见"来解决，不是靠服务类型。
+        -->
+        <service
+            android:name=".service.MonitorService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="夜间值守监控：持续运行车辆检测并在检测到车辆时强制报警，用户已明确开启且界面常驻可见" />
+        </service>
+
+        <!--
+            外部看门狗（M4 兜底）。
+            exported="false"：这个广播只由我们自己的 PendingIntent 发出，
+            不允许其它应用触发（否则任意应用都能反复拉起我们，白白耗电）。
+        -->
+        <receiver
+            android:name=".service.WatchdogReceiver"
+            android:enabled="true"
+            android:exported="false" />
+
+        <!--
+            开机自启（M4）。
+            exported="true" 是必须的：BOOT_COMPLETED 是系统发出的广播。
+        -->
+        <receiver
+            android:name=".service.BootReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+            </intent-filter>
+        </receiver>
 
     </application>
 
