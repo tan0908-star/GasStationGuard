@@ -1272,7 +1272,7 @@ class MainActivity : AppCompatActivity() {
 
         // ---------- ③ 识别与温控（M6） ----------
         container.addView(TextView(this).apply {
-            text = "\n识别与温控"
+            text = "识别与温控"
             textSize = 16f
             setPadding(0, 20, 0, 2)
         })
@@ -1363,7 +1363,7 @@ class MainActivity : AppCompatActivity() {
 
         // 运行信息开关
         container.addView(TextView(this).apply {
-            text = "\n显示运行信息（帧率 / 分辨率 / 闸门状态）"
+            text = "显示运行信息（帧率 / 分辨率 / 闸门状态）"
             textSize = 14f
             setPadding(0, 16, 0, 2)
         })
@@ -1388,7 +1388,7 @@ class MainActivity : AppCompatActivity() {
 
         // ---------- ④ 系统权限（M4 后台值守必需） ----------
         container.addView(TextView(this).apply {
-            text = "\n系统权限（M4 后台值守必需）"
+            text = "系统权限（M4 后台值守必需）"
             textSize = 16f
             setPadding(0, 20, 0, 2)
         })
@@ -1433,7 +1433,7 @@ class MainActivity : AppCompatActivity() {
 
         // ---------- ④ 告警记录（M5） ----------
         container.addView(TextView(this).apply {
-            text = "\n告警记录"
+            text = "告警记录"
             textSize = 16f
             setPadding(0, 20, 0, 2)
         })
